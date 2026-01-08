@@ -1,0 +1,115 @@
+# Configuration for Legacy Datasets (Jeopardy, TREC-CAR, MS Academic)
+
+system:
+  device: 'cuda'  # 'cuda' or 'cpu'
+  seed: 42
+  num_workers: 4
+
+# Data configuration for legacy HDF5 datasets
+data:
+  dataset_type: 'trec-car'  # 'jeopardy', 'trec-car', or 'msa'
+  data_dir: '../Query Reformulator'  # Directory containing HDF5 files
+  
+  # Files will be automatically determined based on dataset_type:
+  # trec-car: trec_car_dataset.hdf5, trec_car_corpus.hdf5 (if exists)
+  # jeopardy: jeopardy_dataset.hdf5, jeopardy_corpus.hdf5
+  # msa: msa_dataset.hdf5, msa_corpus.hdf5
+  
+  # Or manually specify:
+  # dataset_file: 'trec_car_dataset.hdf5'
+  # corpus_file: null  # Use dataset file if corpus not available
+
+# Embeddings
+embeddings:
+  type: 'legacy'  # Use legacy Word2Vec embeddings
+  path: '../Query Reformulator/D_cbow_pdw_8B.pkl'
+  embedding_dim: 500
+  freeze: false  # Fine-tune embeddings during training
+
+# Candidate Mining (unchanged from default)
+candidate_mining:
+  enabled: true
+  max_candidates: 50
+  min_score: 0.1
+  methods:
+    - 'tfidf'
+    - 'bm25'
+  top_k_per_method: 30
+
+# RL Agent (adjusted for legacy embeddings)
+rl_agent:
+  enabled: true
+  embedding_dim: 500  # Match legacy embeddings
+  hidden_dim: 256
+  num_heads: 4
+  num_layers: 2
+  dropout: 0.1
+  max_steps_per_episode: 5
+  num_query_variants: 4
+  
+  # Use legacy embeddings instead of sentence-transformers
+  use_pretrained_embeddings: true
+  embedding_type: 'legacy'  # 'legacy' or 'sentence-transformers'
+
+# RRF Fusion (unchanged)
+rrf_fusion:
+  enabled: true
+  k_constant: 60
+  method: 'rrf'  # 'rrf', 'combsum', or 'hybrid'
+
+# BERT Re-ranker (unchanged)
+bert_reranker:
+  enabled: true
+  model_name: 'cross-encoder/ms-marco-MiniLM-L-12-v2'
+  batch_size: 128
+  max_length: 512
+  top_k_rerank: 100
+  use_fp16: true
+
+# Retrieval (unchanged)
+retrieval:
+  top_k: 100
+  bm25_k1: 0.9
+  bm25_b: 0.4
+
+# Training (adjusted for legacy datasets)
+training:
+  num_epochs: 100
+  batch_size: 32
+  learning_rate: 0.0003
+  episodes_per_update: 128
+  ppo_epochs: 4
+  gamma: 0.99
+  gae_lambda: 0.95
+  clip_epsilon: 0.2
+  value_loss_coef: 0.5
+  entropy_coef: 0.01
+  max_grad_norm: 0.5
+  
+  # Reward shaping
+  reward_weights:
+    recall: 0.7
+    mrr: 0.3
+  
+  # Checkpointing
+  checkpoint_dir: './checkpoints_legacy'
+  save_freq: 5
+  
+  # Early stopping
+  early_stopping_patience: 10
+  
+  # Logging
+  log_dir: './logs_legacy'
+  
+  # Replay buffer
+  buffer_size: 10000
+
+# Evaluation metrics
+evaluation:
+  metrics:
+    - 'recall@40'
+    - 'recall@100'
+    - 'mrr@10'
+    - 'ndcg@10'
+    - 'map'
+    - 'precision@10'
