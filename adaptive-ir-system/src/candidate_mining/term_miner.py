@@ -133,24 +133,24 @@ class CandidateTermMiner:
         return tokens
     
     def _extract_tfidf(self, documents: List[str]) -> Dict[str, float]:
-        """Extract terms using TF-IDF scoring."""
+        """Extract terms using TF-IDF scoring. Thread-safe version."""
         if not documents:
             return {}
         
-        # Fit TF-IDF
-        self.tfidf = TfidfVectorizer(
+        # Create new TF-IDF vectorizer for thread safety
+        tfidf = TfidfVectorizer(
             max_features=self.max_candidates * 2,
             stop_words='english' if self.use_stopwords else None,
             token_pattern=r'\b[a-z]{' + str(self.min_term_length) + r',' + str(self.max_term_length) + r'}\b'
         )
         
         try:
-            tfidf_matrix = self.tfidf.fit_transform(documents)
+            tfidf_matrix = tfidf.fit_transform(documents)
         except ValueError:
             return {}
         
         # Get feature names
-        feature_names = self.tfidf.get_feature_names_out()
+        feature_names = tfidf.get_feature_names_out()
         
         # Average TF-IDF across documents
         mean_tfidf = tfidf_matrix.mean(axis=0).A1

@@ -162,7 +162,9 @@ class QueryReformulatorAgent(nn.Module):
         # Apply mask to logits
         if candidate_mask is not None:
             # Mask out invalid candidates
-            mask_value = -1e9
+            # Use -1e4 for FP16 compatibility (Half precision max ≈ ±65,504)
+            # -1e9 causes overflow when using mixed precision (autocast)
+            mask_value = torch.finfo(action_logits.dtype).min / 2  # Safe value for any dtype
             action_logits[:, :-1] = action_logits[:, :-1].masked_fill(~candidate_mask, mask_value)
         
         # Critic: compute value
