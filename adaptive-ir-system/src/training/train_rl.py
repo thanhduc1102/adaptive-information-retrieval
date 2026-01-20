@@ -158,7 +158,7 @@ class RLTrainingLoop:
             Reward scalar
         """
         delta_recall = metrics_after.get('recall@100', 0.0) - metrics_before.get('recall@100', 0.0)
-        delta_mrr = metrics_after.get('mrr@10', 0.0) - metrics_before.get('mrr@10', 0.0)
+        delta_mrr = metrics_after.get('mrr', 0.0) - metrics_before.get('mrr', 0.0)
         
         reward = (
             self.reward_weights['recall'] * delta_recall +
@@ -301,22 +301,25 @@ class RLTrainingLoop:
         rewards = torch.tensor([exp['reward'] for exp in batch], dtype=torch.float32).to(self.device)
         dones = torch.tensor([exp['done'] for exp in batch], dtype=torch.bool).to(self.device)
         
-        # Compute advantages (simplified - no GAE here)
+        # Get values
         values = torch.tensor([exp['value'] for exp in batch], dtype=torch.float32).to(self.device)
-        advantages = rewards - values
-        
+
+        # Prepare rollout buffer for PPO update
+        rollout_buffer = {
+            'query_emb': query_embs,
+            'current_query_emb': current_query_embs,
+            'candidate_embs': candidate_embs,
+            'candidate_features': candidate_features,
+            'actions': actions,
+            'old_log_probs': old_log_probs,
+            'rewards': rewards.unsqueeze(1),  # [batch, 1] for GAE computation
+            'dones': dones.unsqueeze(1),  # [batch, 1] for GAE computation
+            'values': values.unsqueeze(1)  # [batch, 1] for GAE computation
+        }
+
         # PPO update
-        loss = self.rl_trainer.update(
-            query_embs,
-            current_query_embs,
-            candidate_embs,
-            candidate_features,
-            actions,
-            old_log_probs,
-            advantages,
-            returns=rewards
-        )
-        
+        loss = self.rl_trainer.update(rollout_buffer)
+
         return loss
     
     def train_epoch(self, epoch: int) -> Dict[str, float]:
@@ -373,13 +376,21 @@ class RLTrainingLoop:
                     'reward': f"{np.mean(epoch_rewards[-100:]):.4f}",
                     'episodes': episode_count
                 })
-        
+
+        # Aggregate metrics
         metrics = {
             'avg_reward': np.mean(epoch_rewards) if epoch_rewards else 0.0,
-            'avg_loss': np.mean(epoch_losses) if epoch_losses else 0.0,
             'num_episodes': episode_count
         }
-        
+
+        # Aggregate loss metrics from dicts
+        if epoch_losses:
+            # epoch_losses is a list of dicts, need to aggregate each metric
+            loss_keys = epoch_losses[0].keys()
+            for key in loss_keys:
+                values = [loss_dict[key] for loss_dict in epoch_losses]
+                metrics[f'avg_{key}'] = np.mean(values)
+
         return metrics
     
     def evaluate(self, dataset, split: str = 'val') -> Dict[str, float]:
@@ -409,12 +420,20 @@ class RLTrainingLoop:
             # Run pipeline
             result = self.pipeline.search(query, top_k=100)
             doc_ids = [doc_id for doc_id, _ in result['results']]
-            
-            # Compute metrics
-            evaluator.update(qrel, doc_ids, query_id)
-        
-        metrics = evaluator.aggregate()
-        
+
+            # Add to evaluator
+            # qrel is dict mapping doc_id -> relevance
+            relevant_set = set(qrel.keys())
+            evaluator.add_query_result(
+                query_id=query_id,
+                retrieved=doc_ids,
+                relevant=relevant_set,
+                relevant_grades=qrel
+            )
+
+        # Compute aggregate metrics
+        metrics = evaluator.compute_aggregate()
+
         return metrics
     
     def train(self):
@@ -433,9 +452,15 @@ class RLTrainingLoop:
             # Train epoch
             train_metrics = self.train_epoch(epoch)
             
+            # Build loss string
+            loss_str = ""
+            if 'avg_policy_loss' in train_metrics:
+                loss_str = (f"Policy Loss: {train_metrics['avg_policy_loss']:.4f} | "
+                           f"Value Loss: {train_metrics['avg_value_loss']:.4f}")
+
             self.logger.info(f"Epoch {epoch+1}/{self.num_epochs} | "
                            f"Reward: {train_metrics['avg_reward']:.4f} | "
-                           f"Loss: {train_metrics['avg_loss']:.4f}")
+                           f"{loss_str}")
             
             # Validation
             if (epoch + 1) % self.save_freq == 0:
@@ -443,8 +468,8 @@ class RLTrainingLoop:
                 
                 self.logger.info(f"Validation | "
                                f"Recall@100: {val_metrics['recall@100']:.4f} | "
-                               f"MRR@10: {val_metrics['mrr@10']:.4f}")
-                
+                               f"MRR: {val_metrics['mrr']:.4f}")
+
                 # Save checkpoint
                 checkpoint_path = self.checkpoint_dir / f"checkpoint_epoch_{epoch+1}.pt"
                 save_checkpoint(
@@ -454,9 +479,9 @@ class RLTrainingLoop:
                     val_metrics,
                     checkpoint_path
                 )
-                
+
                 # Early stopping
-                current_metric = val_metrics['mrr@10']
+                current_metric = val_metrics['mrr']
                 
                 if self.early_stopping(current_metric):
                     self.logger.info(f"Early stopping triggered at epoch {epoch+1}")
@@ -472,11 +497,13 @@ class RLTrainingLoop:
                         val_metrics,
                         best_checkpoint_path
                     )
-                    self.logger.info(f"Saved best model with MRR@10: {best_metric:.4f}")
+                    self.logger.info(f"Saved best model with MRR: {best_metric:.4f}")
             
             # Store metrics
             self.metrics_history['train_reward'].append(train_metrics['avg_reward'])
-            self.metrics_history['train_loss'].append(train_metrics['avg_loss'])
+            # Store policy loss if available, otherwise 0
+            loss_value = train_metrics.get('avg_policy_loss', 0.0)
+            self.metrics_history['train_loss'].append(loss_value)
         
         # Final test evaluation
         if self.test_dataset:
@@ -490,7 +517,7 @@ class RLTrainingLoop:
             
             self.logger.info(f"Test Results | "
                            f"Recall@100: {test_metrics['recall@100']:.4f} | "
-                           f"MRR@10: {test_metrics['mrr@10']:.4f}")
+                           f"MRR: {test_metrics['mrr']:.4f}")
             
             # Save test metrics
             test_results_path = self.checkpoint_dir / "test_results.json"

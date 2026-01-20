@@ -42,7 +42,7 @@ class QueryReformulatorAgent(nn.Module):
         
         # Candidate feature encoder
         self.candidate_encoder = nn.Sequential(
-            nn.Linear(self.embedding_dim + 6, self.hidden_dim),  # +6 for features
+            nn.Linear(self.embedding_dim + 3, self.hidden_dim),  # +3 for features (tfidf, bm25_contrib, keybert)
             nn.ReLU(),
             nn.Dropout(self.dropout)
         )
@@ -284,22 +284,25 @@ class RLTrainer:
             advantages: Advantage estimates [batch, seq_len]
             returns: Target returns [batch, seq_len]
         """
+        # Convert dones to float for computation
+        dones_float = dones.float()
+
         advantages = torch.zeros_like(rewards)
         returns = torch.zeros_like(rewards)
-        
+
         gae = 0
         for t in reversed(range(rewards.shape[1])):
             if t == rewards.shape[1] - 1:
                 next_value = 0
             else:
                 next_value = values[:, t + 1]
-            
-            delta = rewards[:, t] + self.gamma * next_value * (1 - dones[:, t]) - values[:, t]
-            gae = delta + self.gamma * self.gae_lambda * (1 - dones[:, t]) * gae
-            
+
+            delta = rewards[:, t] + self.gamma * next_value * (1 - dones_float[:, t]) - values[:, t]
+            gae = delta + self.gamma * self.gae_lambda * (1 - dones_float[:, t]) * gae
+
             advantages[:, t] = gae
             returns[:, t] = advantages[:, t] + values[:, t]
-        
+
         return advantages, returns
     
     def update(self, rollout_buffer: Dict) -> Dict[str, float]:

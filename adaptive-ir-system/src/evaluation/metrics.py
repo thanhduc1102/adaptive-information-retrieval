@@ -249,7 +249,49 @@ class IRMetricsAggregator:
     def get_all_query_metrics(self) -> Dict[str, Dict[str, float]]:
         """Get all query-level metrics."""
         return self.query_metrics
-    
+
+    def compute_single_query(
+        self,
+        relevant: Dict[str, int],
+        retrieved: List[str],
+        query_id: Optional[str] = None
+    ) -> Dict[str, float]:
+        """
+        Compute metrics for a single query without adding to aggregator.
+
+        Args:
+            relevant: Dict mapping doc_id -> relevance grade (or set of relevant doc_ids)
+            retrieved: List of retrieved document IDs (ranked)
+            query_id: Optional query identifier
+
+        Returns:
+            Dictionary of metrics for this query
+        """
+        # Convert to set if dict provided
+        if isinstance(relevant, dict):
+            relevant_set = set(relevant.keys())
+            relevant_grades = relevant
+        else:
+            relevant_set = set(relevant)
+            relevant_grades = {doc_id: 1 for doc_id in relevant_set}
+
+        # Compute metrics
+        metrics = {
+            'recall@10': IRMetrics.recall_at_k(retrieved, relevant_set, 10),
+            'recall@100': IRMetrics.recall_at_k(retrieved, relevant_set, 100),
+            'precision@10': IRMetrics.precision_at_k(retrieved, relevant_set, 10),
+            'mrr': IRMetrics.reciprocal_rank(retrieved, relevant_set),
+            'map': IRMetrics.average_precision(retrieved, relevant_set),
+            'f1@10': IRMetrics.f1_at_k(retrieved, relevant_set, 10),
+        }
+
+        # Add nDCG
+        if relevant_grades:
+            metrics['ndcg@10'] = IRMetrics.ndcg_at_k(retrieved, relevant_grades, 10)
+            metrics['ndcg@100'] = IRMetrics.ndcg_at_k(retrieved, relevant_grades, 100)
+
+        return metrics
+
     def print_summary(self):
         """Print summary of metrics."""
         aggregated = self.compute_aggregate()
