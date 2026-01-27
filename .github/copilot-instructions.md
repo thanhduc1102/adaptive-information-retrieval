@@ -1,150 +1,198 @@
 # Adaptive Information Retrieval - AI Agent Instructions
 
-## Project Overview
+## Architecture Overview
 
-This is an **Adaptive Retrieve-Fuse-Re-rank Search Engine** combining Deep RL query reformulation with modern IR techniques. The system solves the **bounded recall problem** in cascade ranking—documents not found in stage 1 retrieval cannot be recovered by later re-ranking.
-
-**Two implementations coexist:**
-1. **`dl4ir-query-reformulator/`**: Legacy Theano/Python 2.7 reference (read-only)
-2. **`adaptive-ir-system/`**: Modern PyTorch implementation (active development)
-
-## Architecture: 4-Stage Pipeline
+**4-Stage Adaptive IR Pipeline** solving the bounded recall problem in cascade ranking:
 
 ```
-Query → [Stage 0] Candidate Mining → [Stage 1] RL Reformulation
-      → [Stage 2] Multi-Query Retrieval + RRF → [Stage 3] BERT Re-rank → Results
+Query → Stage 0: Candidate Mining (BM25 top-k0)
+      → Stage 1: RL Query Reformulation (Actor-Critic Transformer)
+      → Stage 2: Multi-Query Retrieval + RRF Fusion
+      → Stage 3: BERT Cross-Encoder Re-ranking → Results
 ```
 
-### Key Source Files
-| Component | File | Purpose |
-|-----------|------|---------|
-| Pipeline orchestrator | `src/pipeline/adaptive_pipeline.py` | End-to-end processing |
-| RL Agent | `src/rl_agent/agent.py` | Actor-Critic Transformer for term selection |
-| Training loop | `src/training/train_rl_optimized.py` | GPU-optimized PPO with batched episodes |
-| RRF Fusion | `src/fusion/rrf.py` | Merge multi-query results |
-| Metrics | `src/evaluation/metrics.py` | Recall, MRR, nDCG, MAP computation |
-| Data loading | `src/utils/data_loader.py` | MS MARCO + Legacy HDF5 datasets |
+**Two codebases exist:**
+- `adaptive-ir-system/` — **Active development** (PyTorch, Python 3.10+)
+- `dl4ir-query-reformulator/` — **Legacy reference only** (Theano, Python 2.7)
 
-## Configuration-Driven Development
+## Detailed System Flow
 
-All training parameters live in YAML configs (`configs/`). Key patterns:
+### Training Pipeline Flow
+```
+1. DataManager.load_all()
+   ├── Load Word2Vec embeddings (374K vectors, 500-dim)
+   ├── Load corpus (480K documents from HDF5)
+   ├── Load dataset (queries + qrels for train/valid/test)
+   └── Pre-compute query embeddings (once, stored in tensor)
 
-```yaml
-# configs/msa_optimized_gpu.yaml - Reference GPU config
-data:
-  dataset_type: 'msa'           # Options: msa, trec-car, jeopardy, msmarco
-  data_dir: '../Query Reformulator'
+2. BM25Engine.build_index()
+   └── Build BM25Okapi index from corpus
 
-embeddings:
-  type: 'legacy'                # 'legacy' for Word2Vec, 'sentence-transformers' otherwise
-  path: '../Query Reformulator/D_cbow_pdw_8B.pkl'
+3. Training Loop (PPO):
+   ├── AsyncBatchPrefetcher prepares next batch (parallel)
+   │   ├── Sample batch_qids from train set
+   │   ├── Get query embeddings (pre-computed)
+   │   ├── BM25 search for candidates (lazy cached)
+   │   └── Compute candidate features
+   │
+   ├── Agent.select_action() → choose term to expand
+   │
+   ├── Compute reward:
+   │   ├── Expand query with selected term
+   │   ├── BM25 search with expanded query (lazy cached)
+   │   └── reward = Δ Recall@10 × 5.0
+   │
+   └── PPO Update (every 512 samples):
+       ├── Normalize rewards
+       ├── Compute advantages
+       └── Update policy with clipped objective
 
-training:
-  collect_batch_size: 32        # Episodes collected in parallel
-  episodes_per_update: 256      # Episodes before PPO update
-  use_amp: true                 # Mixed precision (FP16)
+4. Evaluation:
+   ├── Baseline: BM25 only
+   └── RL+RRF: Agent selects expansion → Multi-query → RRF fusion
 ```
 
-**Override via CLI**: `python train_optimized.py --epochs 20 --batch-size 64 --no-amp`
+### Key Optimization Points
+| Issue | Solution in `train_optimized_v2.py` |
+|-------|-------------------------------------|
+| Pre-compute ALL queries wastes time | **Lazy caching** - cache on demand |
+| Sequential batch preparation | **AsyncBatchPrefetcher** - parallel |
+| Slow embedding computation | **Pre-compute once** for all queries |
+| GPU underutilization | **Mixed precision (AMP)** training |
+| Cache grows unbounded | **LRU-style eviction** when full |
 
-## Developer Workflows
+## Key Source Files
 
-### Quick Test (Verify Setup)
+| Purpose | File |
+|---------|------|
+| **Optimized training** | `train_optimized_v2.py` (NEW) |
+| Pipeline orchestrator | `src/pipeline/adaptive_pipeline.py` |
+| RL Agent (Actor-Critic) | `src/rl_agent/agent.py` |
+| GPU training loop | `src/training/train_rl_optimized.py` |
+| Metrics (Recall, MRR, nDCG) | `src/evaluation/metrics.py` |
+| HDF5 dataset loader | `src/utils/legacy_loader.py` |
+| BM25 search (no index) | `src/utils/simple_searcher.py` |
+| RRF fusion | `src/fusion/rrf.py` |
+
+## Quick Commands
+
 ```bash
 cd adaptive-ir-system
-python train_quick_test.py                    # Runs 1 epoch, small batch
-python scripts/test_legacy_data.py            # Verify HDF5 data loading
+
+# NEW: Optimized training (recommended)
+python train_optimized_v2.py --mode quick   # ~3 min test
+python train_optimized_v2.py --mode medium  # ~15 min
+python train_optimized_v2.py --mode full    # Full training
+
+# Original benchmark
+python benchmark_pipeline.py
+
+# Verify setup
+python train_quick_test.py
+python scripts/test_legacy_data.py
 ```
 
-### Full Training
-```bash
-python train_optimized.py --config configs/msa_optimized_gpu.yaml --test
-```
-- Logs to `logs_msa/train.log`
-- Checkpoints saved automatically
+## Configuration Pattern
 
-### Inference
-```bash
-python inference.py --checkpoint checkpoints/best.pt --query "machine learning basics"
+All parameters in YAML configs (`configs/`) or dataclass. CLI overrides supported:
+
+```yaml
+# Key settings
+data:
+  dataset_type: 'msa'          # msa | trec-car | jeopardy | msmarco
+embeddings:
+  type: 'legacy'               # 'legacy' → 500-dim Word2Vec
+training:
+  collect_batch_size: 32       # Parallel episode collection
+  use_amp: true                # FP16 mixed precision
 ```
 
 ## Code Patterns
 
-### Dataset Adapters
-Use `DatasetFactory` to handle both modern and legacy formats:
+### Search Engine Selection (automatic by dataset type)
 ```python
-# src/utils/data_loader.py
-factory = DatasetFactory(config['data'])
-dataset = factory.create_dataset('train')  # Returns appropriate adapter
-queries = dataset.load_queries()           # Unified interface
+# HDF5 datasets (msa, jeopardy, trec-car) → SimpleBM25Searcher
+from src.utils.simple_searcher import SimpleBM25Searcher
+searcher = SimpleBM25Searcher(corpus_adapter)
+
+# MS MARCO → LuceneSearcher (requires pre-built index)
+from pyserini.search.lucene import LuceneSearcher
+searcher = LuceneSearcher(index_path)
 ```
 
-### Search Engine Abstraction
-Two search backends with same interface:
-- **`SimpleBM25Searcher`**: In-memory BM25 for HDF5 datasets (no index required)
-- **`LuceneSearcher`**: Pyserini for MS MARCO (requires pre-built index)
-
-Selection is automatic based on `dataset_type` in config.
-
-### RL Agent Interface
+### RL Agent Forward Pass
 ```python
-# Forward pass returns: (action_logits, value_estimate, stop_logit)
-logits, value, stop = agent(query_emb, current_emb, candidate_embs, features)
+# Returns: (action_logits, value_estimate)
+logits, value = agent(query_emb, cand_embs, cand_features, mask)
+
+# Select action
+action, log_prob, value = agent.select_action(q_emb, c_embs, c_feats, mask)
 ```
 
-### Embedding Cache Pattern
-`EmbeddingCache` in training loop pre-computes embeddings to avoid redundant computation:
+### Async Batch Prefetching (NEW)
 ```python
-cache = EmbeddingCache(embedding_model, device='cuda')
-emb = cache.get("query text")        # Single text
-embs = cache.get_batch(["t1", "t2"]) # Batched
+prefetcher = AsyncBatchPrefetcher(data, search, config, train_qids)
+prefetcher.start()
+batch = prefetcher.get_batch()  # Non-blocking, pre-prepared
+prefetcher.stop()
 ```
 
-## Important Conventions
+### Metrics Always Require K
+```python
+from src.evaluation.metrics import IRMetrics
+IRMetrics.recall_at_k(retrieved, relevant, k=100)
+IRMetrics.reciprocal_rank(retrieved, relevant)  # MRR
+```
 
-1. **Device handling**: Always respect `config['system']['device']`. Check CUDA availability:
-   ```python
-   device = 'cuda' if torch.cuda.is_available() else 'cpu'
-   ```
+## Reward Function
 
-2. **Java for Pyserini**: Auto-configured in `train_optimized.py::check_and_setup_java()`. If adding new entry points, include similar logic.
+```python
+# In training loop
+if action == STOP:
+    reward = base_recall * 0.5
+else:
+    expanded_query = query + " " + doc_text[:50]
+    new_recall = recall@10(search(expanded_query))
+    reward = (new_recall - base_recall) * 5.0  # Scale for learning
+```
 
-3. **Legacy vs Modern embeddings**: Set `embeddings.type: 'legacy'` for 500-dim Word2Vec, otherwise sentence-transformers (384-dim).
+## Critical Conventions
 
-4. **Metrics at K**: Always specify cutoff: `recall_at_k(retrieved, relevant, k=100)`
+1. **Device handling**: Always use `config['system']['device']`, never hardcode `'cuda'`
+2. **Java for Pyserini**: Entry points must call `check_and_setup_java()` from `train_optimized.py`
+3. **Legacy embeddings**: `D_cbow_pdw_8B.pkl` is 500-dim; sentence-transformers are 384-dim
+4. **Logging**: Use `setup_logging()` from `src/utils/` — includes emoji prefixes
 
-5. **Logging**: Use `setup_logging()` from utils; logs include emoji prefixes for visual scanning.
+## Data Files
 
-## Data Requirements
+| Dataset | Required Files | Location |
+|---------|---------------|----------|
+| MS Academic | `msa_dataset.hdf5`, `msa_corpus.hdf5`, `D_cbow_pdw_8B.pkl` | `Query Reformulator/` |
+| MS MARCO | Download via `scripts/download_msmarco.py` | `data/msmarco/` |
 
-| Dataset | Files Needed | Size |
-|---------|--------------|------|
-| MS Academic | `msa_dataset.hdf5`, `msa_corpus.hdf5`, `D_cbow_pdw_8B.pkl` | ~1.7GB |
-| TREC-CAR | `trec_car_dataset.hdf5` + embeddings | Similar |
-| MS MARCO | Download via `scripts/download_msmarco.py`, build index | ~3GB+ |
+## Troubleshooting
 
-## Common Issues
+| Issue | Fix |
+|-------|-----|
+| CUDA OOM | Reduce `batch_size`, enable `use_amp: true` |
+| Java not found | Set `JAVA_HOME` or auto-detect handles `/usr/lib/jvm/java-*` |
+| HDF5 key errors | Run `scripts/check_hdf5_structure.py` |
+| Slow training | Use `train_optimized_v2.py` (async prefetch + lazy cache) |
+| Pre-computing too slow | Already fixed in V2 - no upfront pre-compute |
 
-| Problem | Solution |
-|---------|----------|
-| CUDA OOM | Reduce `collect_batch_size`, enable `use_amp: true` |
-| Java not found | Set `JAVA_HOME` or install openjdk-11+ |
-| HDF5 key errors | Check `scripts/check_hdf5_structure.py` for expected keys |
-| Slow training | Use `train_optimized.py` (batched), not `train.py` |
-| Agent outputs zeros | Normal early in training; check after 50+ episodes |
+## Proposal vs Implementation Status
 
-## Documentation
+| Proposal Stage | Status | Notes |
+|---------------|--------|-------|
+| Stage 0: Candidate Mining | ✅ Done | BM25 top-k0 |
+| Stage 1: RL Reformulation | ✅ Done | Actor-Critic + PPO |
+| Stage 2: Multi-Query + RRF | ✅ Done | In evaluation |
+| Stage 3: BERT Re-rank | ⏳ TODO | Planned but not implemented |
 
-- **Vietnamese docs**: `docs/TONG_QUAN_HE_THONG.md` (architecture), `QUICK_START_MSA.md`
-- **Diagrams**: `MERMAID_DIAGRAMS.md` for visual architecture
-- **GPU optimization**: `docs/GPU_OPTIMIZATION_ANALYSIS.md`
+## Legacy Reference (read-only)
 
----
-
-## Legacy Reference (`dl4ir-query-reformulator/`)
-
-The original Theano implementation is preserved for reference:
-- **Python 2.7 + Theano 0.9** (not 1.0—causes NullTypeGradError)
-- Training: `THEANO_FLAGS='floatX=float32,device=gpu0' python run.py`
-- Config in `parameters.py`, not YAML
-- Uses PyLucene (requires `lucene.initVM()` before imports)
+`dl4ir-query-reformulator/` uses Theano 0.9 + Python 2.7:
+```bash
+THEANO_FLAGS='floatX=float32,device=gpu0' python run.py
+```
+Config in `parameters.py`. Do not modify—reference implementation only.
