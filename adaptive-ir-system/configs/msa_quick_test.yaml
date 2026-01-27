@@ -4,7 +4,7 @@
 system:
   device: 'cuda'      # Đổi thành 'cpu' nếu không có GPU
   seed: 42
-  num_workers: 2
+  num_workers: 4
 
 # MS Academic data
 data:

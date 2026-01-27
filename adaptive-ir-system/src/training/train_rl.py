@@ -209,12 +209,18 @@ class RLTrainingLoop:
         feature_matrix = self.pipeline.candidate_miner.get_candidate_features(candidates)
         candidate_features = torch.tensor(feature_matrix, dtype=torch.float32)
         
-        # Move to device
+        ### nnminh 
         query_emb = query_emb.to(self.device)
         candidate_embs = candidate_embs.to(self.device)
         candidate_features = candidate_features.to(self.device)
         
-        # Episode: select terms iteratively
+        with torch.no_grad():
+            q0_enc_cached, cand_enc_cached = self.pipeline.rl_agent.encode_static(
+                query_emb.unsqueeze(0), 
+                candidate_embs.unsqueeze(0), 
+                candidate_features.unsqueeze(0)
+            )
+        
         current_query = query
         selected_terms = []
         total_reward = 0.0
@@ -222,14 +228,17 @@ class RLTrainingLoop:
         for step in range(self.max_steps):
             current_emb = self.pipeline._embed_text(current_query).unsqueeze(0).to(self.device)
             
-            # Select action
             action, log_prob, value = self.pipeline.rl_agent.select_action(
                 query_emb.unsqueeze(0),
                 current_emb,
                 candidate_embs.unsqueeze(0),
                 candidate_features.unsqueeze(0),
-                deterministic=False
+                deterministic=False,
+                # add cached encodings
+                q0_enc=q0_enc_cached,
+                cand_enc=cand_enc_cached
             )
+        ### done 
             
             action_idx = action.item()
             log_prob_val = log_prob.item()

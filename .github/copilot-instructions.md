@@ -1,150 +1,150 @@
-# Query Reformulator - AI Agent Instructions
+# Adaptive Information Retrieval - AI Agent Instructions
 
 ## Project Overview
 
-This is a **Deep Reinforcement Learning Query Reformulation Framework** implementing the paper "Task-Oriented Query Reformulation with Reinforcement Learning" (EMNLP 2017). The system uses an RL agent with actor-critic architecture to iteratively reformulate queries, aiming to improve information retrieval metrics (Recall, MAP, F1) by solving the bounded recall problem in cascade ranking systems.
+This is an **Adaptive Retrieve-Fuse-Re-rank Search Engine** combining Deep RL query reformulation with modern IR techniques. The system solves the **bounded recall problem** in cascade ranking—documents not found in stage 1 retrieval cannot be recovered by later re-ranking.
 
-## Architecture & Key Components
+**Two implementations coexist:**
+1. **`dl4ir-query-reformulator/`**: Legacy Theano/Python 2.7 reference (read-only)
+2. **`adaptive-ir-system/`**: Modern PyTorch implementation (active development)
 
-### Data Pipeline (HDF5-based)
-- **Dataset**: Queries + ground-truth documents stored in HDF5 format
-  - `dataset_hdf5.py`: Wrapper for accessing queries and document IDs via `get_queries()`, `get_doc_ids()`
-  - `corpus_hdf5.py`: Document corpus access via `get_article_text()`, `get_article_title()`
-- **Datasets**: MS Academic, Jeopardy, TREC-CAR (queries, corpus pairs)
-- **Pre-trained embeddings**: 374K Word2Vec embeddings in `D_cbow_pdw_8B_norm.pkl`
+## Architecture: 4-Stage Pipeline
 
-### RL Agent Architecture
-- **Actor-Critic** with CNNs for feature extraction
-  - Query encoder: CNN over word embeddings (`filters_query`, `window_query`)
-  - Candidate encoder: CNN over feedback document words (`filters_cand`, `window_cand`)
-  - Actor: Selects terms via softmax policy (`n_hidden_actor` layers)
-  - Critic: Estimates baseline value (`n_hidden_critic` layers)
-- **MDP formulation**: State = current query + feedback docs, Action = binary term selection, Reward = IR metrics (RECALL/MAP/F1)
-- **Policy**: Stochastic during training (`trng.multinomial`), greedy during evaluation
-
-### Search Engine Integration
-- **Lucene-based** (`lucene_search.py`): Uses PyLucene for document retrieval
-  - Creates indexes at `index_folder` if missing
-  - Multi-threaded query execution (`n_threads` parallel processes)
-  - Caching support (`use_cache`) for query-document pairs
-- **Custom Theano Op** (`op_search.py`): `Search` class wraps search engine calls in Theano computation graph
-  - Retrieves `max_candidates` documents per query
-  - Returns metrics (RECALL, PRECISION, F1, MAP, LOG-GMAP) and feedback documents
-
-### Training Loop (`run.py`)
-- **Iterative reformulation**: `n_iterations` rounds of query expansion
-  - Iteration 0: Original query → retrieve feedback docs
-  - Iterations 1+: Agent selects terms from feedback docs → reformulate → retrieve
-- **Frozen phases**: `frozen_until` iterations act greedily without learning; `q_0_fixed_until` keeps original query fixed
-- **REINFORCE with baseline**: Policy gradient loss = `(reward - baseline) * -log(p(action))`
-- **Regularization**: Entropy regularization (`erate`), L2 regularization (`l2reg`)
-
-## Critical Configuration (`parameters.py`)
-
-```python
-# Model hyperparameters
-dim_proj = 500          # LSTM/hidden units
-dim_emb = 500           # Word embedding dimension
-batch_size_train = 64   # Training batch size
-n_iterations = 2        # Query reformulation iterations
-max_candidates = 40     # Max retrieved documents
-max_feedback_docs = 7   # Max feedback docs for term mining
-frozen_until = 1        # Greedy iterations before learning
-reward = 'RECALL'       # Optimization metric: RECALL/F1/MAP/gMAP
-
-# Search engine
-engine = 'lucene'       # Must be 'lucene'
-n_threads = 20          # Parallel search threads
-index_folder = data_folder + '/index/'
+```
+Query → [Stage 0] Candidate Mining → [Stage 1] RL Reformulation
+      → [Stage 2] Multi-Query Retrieval + RRF → [Stage 3] BERT Re-rank → Results
 ```
 
-## Development Workflows
+### Key Source Files
+| Component | File | Purpose |
+|-----------|------|---------|
+| Pipeline orchestrator | `src/pipeline/adaptive_pipeline.py` | End-to-end processing |
+| RL Agent | `src/rl_agent/agent.py` | Actor-Critic Transformer for term selection |
+| Training loop | `src/training/train_rl_optimized.py` | GPU-optimized PPO with batched episodes |
+| RRF Fusion | `src/fusion/rrf.py` | Merge multi-query results |
+| Metrics | `src/evaluation/metrics.py` | Recall, MRR, nDCG, MAP computation |
+| Data loading | `src/utils/data_loader.py` | MS MARCO + Legacy HDF5 datasets |
 
-### Setup & Prerequisites
-- **Python 2.7** (legacy codebase)
-- **Theano 0.9** (not 1.0 - NullTypeGradError issue)
-- **PyLucene 6.2+** (Java-based, requires JVM initialization)
-- **32GB RAM recommended**, 6GB+ GPU for training
+## Configuration-Driven Development
 
-### Training from Scratch
+All training parameters live in YAML configs (`configs/`). Key patterns:
+
+```yaml
+# configs/msa_optimized_gpu.yaml - Reference GPU config
+data:
+  dataset_type: 'msa'           # Options: msa, trec-car, jeopardy, msmarco
+  data_dir: '../Query Reformulator'
+
+embeddings:
+  type: 'legacy'                # 'legacy' for Word2Vec, 'sentence-transformers' otherwise
+  path: '../Query Reformulator/D_cbow_pdw_8B.pkl'
+
+training:
+  collect_batch_size: 32        # Episodes collected in parallel
+  episodes_per_update: 256      # Episodes before PPO update
+  use_amp: true                 # Mixed precision (FP16)
+```
+
+**Override via CLI**: `python train_optimized.py --epochs 20 --batch-size 64 --no-amp`
+
+## Developer Workflows
+
+### Quick Test (Verify Setup)
 ```bash
-# CPU training
-THEANO_FLAGS='floatX=float32' python run.py
-
-# GPU training (K80 recommended)
-THEANO_FLAGS='floatX=float32,device=gpu0' python run.py
+cd adaptive-ir-system
+python train_quick_test.py                    # Runs 1 epoch, small batch
+python scripts/test_legacy_data.py            # Verify HDF5 data loading
 ```
-- **Training time**: 800K iterations (~7-10 days on K80) to reach 47.6% Recall@40 on TREC-CAR
-- **Cold start**: Model starts selecting terms after ~50K iterations
-- **Checkpointing**: Model saved every `saveFreq` iterations to `model.npz`
 
-### Using Pre-trained Models
-Set `reload_model='model.npz'` in `parameters.py` to resume training or evaluate
+### Full Training
+```bash
+python train_optimized.py --config configs/msa_optimized_gpu.yaml --test
+```
+- Logs to `logs_msa/train.log`
+- Checkpoints saved automatically
 
-### Evaluation
-- Validation runs every `validFreq` iterations
-- Metrics computed: RECALL, PRECISION, F1, MAP, LOG-GMAP (see `average_precision.py`)
-- Test sizes configurable via `train_size`, `valid_size`, `test_size` (use `-1` for full dataset)
+### Inference
+```bash
+python inference.py --checkpoint checkpoints/best.pt --query "machine learning basics"
+```
 
-## Code Patterns & Conventions
+## Code Patterns
 
-### Theano Computation Graph
-- **Shared variables**: `init_tparams()` converts NumPy params → Theano shared variables
-- **Custom ops**: Search engine calls integrated via `theano.Op` subclass with `perform()` method
-- **Gradient handling**: Use `theano.gradient.disconnected_grad()` for REINFORCE baseline, `grad_scale()` for critic
+### Dataset Adapters
+Use `DatasetFactory` to handle both modern and legacy formats:
+```python
+# src/utils/data_loader.py
+factory = DatasetFactory(config['data'])
+dataset = factory.create_dataset('train')  # Returns appropriate adapter
+queries = dataset.load_queries()           # Unified interface
+```
 
-### Data Preprocessing (`utils.py`)
-- **Text cleaning**: `clean()` removes Wikipedia/AQUAINT markup
-- **Tokenization**: NLTK's `wordpunct_tokenize` throughout
-- **Index conversion**: `text2idx()` converts text → vocabulary indices, handles UNK with `-1`, padding with `-2`
-- **BoW**: Normalized bag-of-words via `BOW()`, `BOW2()`
+### Search Engine Abstraction
+Two search backends with same interface:
+- **`SimpleBM25Searcher`**: In-memory BM25 for HDF5 datasets (no index required)
+- **`LuceneSearcher`**: Pyserini for MS MARCO (requires pre-built index)
 
-### Vocabulary & Embeddings
-- **Fixed vocabulary**: 374K words loaded from pickle
-- **Embedding fine-tuning**: Set `fixed_wemb=False` to learn embeddings (default: frozen)
-- **PCA compression**: If `dim_emb < embedding_dim`, apply PCA to reduce dimensionality
+Selection is automatic based on `dataset_type` in config.
 
-### Loss Computation
-- **Policy gradient**: `-log(p(action)) * (reward - baseline)` for selected terms only (after `q_0_fixed_until`)
-- **Baseline loss**: MSE of critic prediction `(reward - baseline)^2`
-- **Entropy bonus**: `-erate * Σ p*log(p)` to encourage exploration
+### RL Agent Interface
+```python
+# Forward pass returns: (action_logits, value_estimate, stop_logit)
+logits, value, stop = agent(query_emb, current_emb, candidate_embs, features)
+```
 
-## Typical Modification Points
+### Embedding Cache Pattern
+`EmbeddingCache` in training loop pre-computes embeddings to avoid redundant computation:
+```python
+cache = EmbeddingCache(embedding_model, device='cuda')
+emb = cache.get("query text")        # Single text
+embs = cache.get_batch(["t1", "t2"]) # Batched
+```
 
-### Changing Datasets
-1. Update `dataset_path`, `docs_path` in `parameters.py`
-2. Ensure HDF5 files have keys: `queries_train/valid/test`, `doc_ids_train/valid/test`, `text`, `title`
-3. Re-run to create new Lucene indexes
+## Important Conventions
 
-### Tuning RL Agent
-- **Exploration**: Increase `erate` (entropy regularization)
-- **Learning rate**: Adjust `lrate` for SGD or optimizer defaults
-- **Freezing**: Set `frozen_until` to delay learning, `q_0_fixed_until` to preserve original query longer
-- **Feedback quality**: Change `max_feedback_docs`, `max_candidates` to control term mining pool
+1. **Device handling**: Always respect `config['system']['device']`. Check CUDA availability:
+   ```python
+   device = 'cuda' if torch.cuda.is_available() else 'cpu'
+   ```
 
-### Custom Metrics
-- Add metrics to `metrics_map` in `parameters.py` and compute in `op_search.py`'s `perform()` method
-- Update `reward` parameter to optimize new metric
+2. **Java for Pyserini**: Auto-configured in `train_optimized.py::check_and_setup_java()`. If adding new entry points, include similar logic.
 
-### Alternative Search Engines
-- Implement interface matching `LuceneSearch.get_candidates()` signature
-- Set `engine='<name>'` in `parameters.py` and import in `train()`
+3. **Legacy vs Modern embeddings**: Set `embeddings.type: 'legacy'` for 500-dim Word2Vec, otherwise sentence-transformers (384-dim).
 
-## Common Issues & Debugging
+4. **Metrics at K**: Always specify cutoff: `recall_at_k(retrieved, relevant, k=100)`
 
-- **"NullTypeGradError"**: Downgrade to Theano 0.9 from 1.0
-- **Index creation hangs**: Lucene index building is one-time but slow; check `index_folder` for completion
-- **PyLucene import errors**: Requires `lucene.initVM()` before use (see `LuceneSearch.__init__`)
-- **Memory issues**: Reduce `batch_size_train`, disable `use_cache`, or increase RAM
-- **Agent not selecting terms**: Normal before ~50K iterations; check `frozen_until` isn't too high
-- **Ground-truth doc not in index**: Warning printed but training continues; check corpus-dataset alignment
+5. **Logging**: Use `setup_logging()` from utils; logs include emoji prefixes for visual scanning.
 
-## Project Extensions (Proposal Context)
+## Data Requirements
 
-The Vietnamese proposal (`proposal_project_only.txt`) outlines extending this codebase to:
-- Add **Reciprocal Rank Fusion (RRF)** for multi-query result merging
-- Integrate **BERT Cross-Encoder** re-ranking after retrieval
-- Evaluate on **MS MARCO** and **BEIR** (OOD generalization)
-- Compare against baselines: RM3, dense retrievers, original RL reformulator
+| Dataset | Files Needed | Size |
+|---------|--------------|------|
+| MS Academic | `msa_dataset.hdf5`, `msa_corpus.hdf5`, `D_cbow_pdw_8B.pkl` | ~1.7GB |
+| TREC-CAR | `trec_car_dataset.hdf5` + embeddings | Similar |
+| MS MARCO | Download via `scripts/download_msmarco.py`, build index | ~3GB+ |
 
-When implementing these, maintain the existing RL loop structure but insert RRF fusion before re-ranking, and replace Lucene metrics with BERT-scored metrics in the reward signal.
+## Common Issues
+
+| Problem | Solution |
+|---------|----------|
+| CUDA OOM | Reduce `collect_batch_size`, enable `use_amp: true` |
+| Java not found | Set `JAVA_HOME` or install openjdk-11+ |
+| HDF5 key errors | Check `scripts/check_hdf5_structure.py` for expected keys |
+| Slow training | Use `train_optimized.py` (batched), not `train.py` |
+| Agent outputs zeros | Normal early in training; check after 50+ episodes |
+
+## Documentation
+
+- **Vietnamese docs**: `docs/TONG_QUAN_HE_THONG.md` (architecture), `QUICK_START_MSA.md`
+- **Diagrams**: `MERMAID_DIAGRAMS.md` for visual architecture
+- **GPU optimization**: `docs/GPU_OPTIMIZATION_ANALYSIS.md`
+
+---
+
+## Legacy Reference (`dl4ir-query-reformulator/`)
+
+The original Theano implementation is preserved for reference:
+- **Python 2.7 + Theano 0.9** (not 1.0—causes NullTypeGradError)
+- Training: `THEANO_FLAGS='floatX=float32,device=gpu0' python run.py`
+- Config in `parameters.py`, not YAML
+- Uses PyLucene (requires `lucene.initVM()` before imports)

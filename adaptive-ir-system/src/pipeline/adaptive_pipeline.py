@@ -182,27 +182,38 @@ class AdaptiveIRPipeline:
         candidate_embs = candidate_embs.to(self.device)
         candidate_features = candidate_features.to(self.device)
         
-        # Generate variants
-        query_variants = [query]  # Always include original
+        ### nnminh
+        with torch.no_grad():
+            q0_enc_cached, cand_enc_cached = self.rl_agent.encode_static(
+                query_emb.unsqueeze(0), # Thêm dim batch
+                candidate_embs.unsqueeze(0), 
+                candidate_features.unsqueeze(0)
+            )
+        
+        query_variants = [query]  
         
         with torch.no_grad():
             for _ in range(num_variants - 1):
                 current_query = query
                 selected_terms = []
                 
-                # Episode: select terms iteratively
                 for step in range(self.max_steps):
                     current_emb = self._embed_text(current_query).unsqueeze(0).to(self.device)
                     
-                    # Select action
                     action, log_prob, value = self.rl_agent.select_action(
                         query_emb.unsqueeze(0),
                         current_emb,
                         candidate_embs.unsqueeze(0),
                         candidate_features.unsqueeze(0),
-                        deterministic=False
+                        deterministic=False,
+                        # add cached encodings
+                        q0_enc=q0_enc_cached,
+                        cand_enc=cand_enc_cached
                     )
-                    
+        ### done\
+            
+            
+            
                     action_idx = action.item()
                     
                     # Check if STOP action

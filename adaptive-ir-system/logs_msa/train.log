@@ -207,3 +207,51 @@ LookupError:
     - '/usr/local/lib/nltk_data'
 **********************************************************************
 
+2026-01-28 00:57:35 - INFO     - ================================================================================
+2026-01-28 00:57:35 - INFO     - Adaptive IR System - Training
+2026-01-28 00:57:35 - INFO     - ================================================================================
+2026-01-28 00:57:35 - INFO     - Random seed: 42
+2026-01-28 00:57:35 - WARNING  - CUDA not available, using CPU
+2026-01-28 00:57:35 - INFO     - Device: cpu
+2026-01-28 00:57:35 - INFO     - Loading datasets...
+2026-01-28 00:57:35 - INFO     - Loading legacy dataset: msa_dataset.hdf5
+2026-01-28 00:57:35 - INFO     - Loaded dataset: msa_dataset.hdf5
+2026-01-28 00:57:35 - INFO     - Available splits: train, valid, test
+2026-01-28 00:57:35 - INFO     - Loaded corpus: msa_corpus.hdf5 (480,722 documents)
+2026-01-28 00:57:50 - INFO     - Loaded train split: 271345 queries
+2026-01-28 00:57:50 - INFO     - Loading legacy dataset: msa_dataset.hdf5
+2026-01-28 00:57:50 - INFO     - Loaded dataset: msa_dataset.hdf5
+2026-01-28 00:57:50 - INFO     - Available splits: train, valid, test
+2026-01-28 00:57:50 - INFO     - Loaded corpus: msa_corpus.hdf5 (480,722 documents)
+2026-01-28 00:57:51 - INFO     - Loaded valid split: 20000 queries
+2026-01-28 00:57:51 - INFO     - Train queries: 271345
+2026-01-28 00:57:51 - INFO     - Val queries: 20000
+2026-01-28 00:57:51 - INFO     - Initializing search engine...
+2026-01-28 00:57:51 - INFO     - Using SimpleBM25Searcher for msa dataset
+2026-01-28 00:57:51 - INFO     - Building BM25 index from corpus...
+2026-01-28 00:57:53 - INFO     - Indexing 468491 relevant documents...
+2026-01-28 00:57:55 - INFO     - BM25 index built with 468491 documents
+2026-01-28 00:57:55 - INFO     - Search engine: SimpleBM25 (legacy dataset)
+2026-01-28 00:57:55 - INFO     - Building pipeline...
+2026-01-28 00:57:55 - INFO     - Loading embeddings from D_cbow_pdw_8B.pkl...
+2026-01-28 00:57:56 - INFO     - Loaded 374,557 words, dim=500
+2026-01-28 00:57:56 - INFO     - Loaded legacy Word2Vec embeddings from ../Query Reformulator/D_cbow_pdw_8B.pkl
+2026-01-28 00:57:56 - INFO     - Initialized Candidate Term Miner
+2026-01-28 00:57:56 - INFO     - Initialized RL Agent with 2,232,323 parameters
+2026-01-28 00:57:56 - INFO     - Initialized RRF Fusion (k=60)
+2026-01-28 00:58:02 - INFO     - Initialized BERT Re-ranker
+2026-01-28 00:58:02 - INFO     - Pipeline initialized successfully
+2026-01-28 00:58:02 - INFO     - Initializing training loop...
+2026-01-28 00:58:02 - INFO     - Initialized RL Training Loop
+2026-01-28 00:58:02 - INFO     - Starting training...
+2026-01-28 00:58:02 - INFO     - Epochs: 50
+2026-01-28 00:58:02 - INFO     - Batch size: 32
+2026-01-28 00:58:02 - INFO     - Episodes per update: 128
+2026-01-28 00:58:02 - INFO     - --------------------------------------------------------------------------------
+2026-01-28 00:58:02 - INFO     - Starting training...
+2026-01-28 00:58:02 - INFO     - Computing baseline metrics (no RL)...
+2026-01-28 00:58:39 - INFO     - 
+Training interrupted by user
+2026-01-28 00:58:39 - INFO     - ================================================================================
+2026-01-28 00:58:39 - INFO     - Training completed!
+2026-01-28 00:58:39 - INFO     - ================================================================================
