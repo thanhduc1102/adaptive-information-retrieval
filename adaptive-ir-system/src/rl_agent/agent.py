@@ -87,6 +87,23 @@ class QueryReformulatorAgent(nn.Module):
         
         # STOP action head
         self.stop_head = nn.Linear(self.hidden_dim, 1)
+    
+    ### nnminh reduce redundant computations
+    
+    def encode_static(
+        self,
+        query_emb: torch.Tensor,
+        candidate_embs: torch.Tensor,
+        candidate_features: torch.Tensor
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        # q0)
+        q0_enc = self.query_encoder(query_emb)
+        
+        # andidates
+        cand_input = torch.cat([candidate_embs, candidate_features], dim=-1)
+        cand_enc = self.candidate_encoder(cand_input)
+        
+        return q0_enc, cand_enc
         
     def forward(
         self,
@@ -94,39 +111,29 @@ class QueryReformulatorAgent(nn.Module):
         current_query_emb: torch.Tensor,
         candidate_embs: torch.Tensor,
         candidate_features: torch.Tensor,
-        candidate_mask: Optional[torch.Tensor] = None
+        candidate_mask: Optional[torch.Tensor] = None,
+        q0_enc: Optional[torch.Tensor] = None, 
+        cand_enc: Optional[torch.Tensor] = None
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        """
-        Forward pass.
         
-        Args:
-            query_emb: Original query embedding [batch, emb_dim]
-            current_query_emb: Current query embedding [batch, emb_dim]
-            candidate_embs: Candidate embeddings [batch, num_cands, emb_dim]
-            candidate_features: Candidate features [batch, num_cands, num_features]
-            candidate_mask: Mask for padding [batch, num_cands]
-            
-        Returns:
-            action_logits: Logits for each action [batch, num_cands + 1] (+1 for STOP)
-            value: State value estimate [batch, 1]
-            attention_weights: Attention over candidates [batch, num_cands]
-        """
         batch_size, num_cands, _ = candidate_embs.shape
         
-        # Encode queries
-        q0_enc = self.query_encoder(query_emb)  # [batch, hidden]
-        qt_enc = self.query_encoder(current_query_emb)  # [batch, hidden]
+        if q0_enc is None:
+            q0_enc = self.query_encoder(query_emb)  
         
-        # Encode candidates with features
-        cand_input = torch.cat([candidate_embs, candidate_features], dim=-1)
-        cand_enc = self.candidate_encoder(cand_input)  # [batch, num_cands, hidden]
+        qt_enc = self.query_encoder(current_query_emb) 
         
-        # Prepare input for transformer: [q0, qt, cand1, cand2, ...]
+        if cand_enc is None:
+            cand_input = torch.cat([candidate_embs, candidate_features], dim=-1)
+            cand_enc = self.candidate_encoder(cand_input) 
+        
         seq_input = torch.cat([
-            q0_enc.unsqueeze(1),  # [batch, 1, hidden]
-            qt_enc.unsqueeze(1),  # [batch, 1, hidden]
-            cand_enc  # [batch, num_cands, hidden]
-        ], dim=1)  # [batch, 2 + num_cands, hidden]
+            q0_enc.unsqueeze(1),
+            qt_enc.unsqueeze(1),
+            cand_enc
+        ], dim=1)
+        
+        ### done, continue
         
         # Create attention mask if needed
         if candidate_mask is not None:
@@ -172,6 +179,7 @@ class QueryReformulatorAgent(nn.Module):
         
         return action_logits, value, attn_weights.squeeze(1)
     
+    ### nnminh
     def select_action(
         self,
         query_emb: torch.Tensor,
@@ -179,25 +187,18 @@ class QueryReformulatorAgent(nn.Module):
         candidate_embs: torch.Tensor,
         candidate_features: torch.Tensor,
         candidate_mask: Optional[torch.Tensor] = None,
-        deterministic: bool = False
+        deterministic: bool = False,
+        # add kwargs 
+        **kwargs 
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        """
-        Select action using current policy.
         
-        Args:
-            [same as forward]
-            deterministic: If True, select argmax. If False, sample from distribution.
-            
-        Returns:
-            action: Selected action indices [batch]
-            log_prob: Log probability of selected action [batch]
-            value: State value [batch, 1]
-        """
         action_logits, value, attn_weights = self.forward(
             query_emb, current_query_emb, candidate_embs,
-            candidate_features, candidate_mask
+            candidate_features, candidate_mask,
+            **kwargs 
         )
-        
+    ### done 
+    
         # Create action distribution
         action_probs = F.softmax(action_logits, dim=-1)
         dist = torch.distributions.Categorical(action_probs)
