@@ -25,7 +25,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from src.utils import setup_logging, ConfigManager, set_seed
 from src.utils.data_loader import DatasetFactory
 from src.pipeline import AdaptiveIRPipeline
-from src.training.train_rl_optimized_quick_with_old_model import OptimizedRLTrainingLoop
+from src.training.train_rl_quickly import OptimizedRLTrainingLoop
 
 
 def load_config(config_path: str) -> dict:
