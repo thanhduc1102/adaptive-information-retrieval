@@ -43,6 +43,8 @@ uv pip install -r requirements.txt
 
 # Optional: If running in a root environment (like a Kaggle server or Docker container)
 # uv pip install -r requirements.txt --system
+
+uv pip install --upgrade huggingface_hub transformers peft
 ```
 
 ## 5. System Configuration (Java)
