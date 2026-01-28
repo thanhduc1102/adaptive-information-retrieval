@@ -105,8 +105,15 @@ class AdaptiveIRPipeline:
         
         results = self.search_engine.search(query, top_k)
         
-        doc_ids = [r['doc_id'] for r in results]
-        scores = [r['score'] for r in results]
+        # --- PATCHED FOR PYSERINI ---
+        if results and hasattr(results[0], 'docid'):
+            # Pyserini returns objects with attributes
+            doc_ids = [r.docid for r in results]
+            scores = [r.score for r in results]
+        else:
+            # Legacy returns dictionaries
+            doc_ids = [r['doc_id'] for r in results]
+            scores = [r['score'] for r in results]
         
         return doc_ids, scores
     
@@ -134,7 +141,22 @@ class AdaptiveIRPipeline:
         # Get document texts
         documents = []
         for doc_id in doc_ids:
-            doc_text = self.search_engine.get_document(doc_id)
+            # --- PATCHED FOR PYSERINI ---
+            if hasattr(self.search_engine, 'doc'):
+                # Pyserini Logic
+                doc_obj = self.search_engine.doc(doc_id)
+                if doc_obj:
+                    try:
+                        import json
+                        # Pyserini thường trả về JSON string, ta cần lấy trường 'contents'
+                        doc_text = json.loads(doc_obj.raw()).get('contents', doc_obj.raw())
+                    except:
+                        doc_text = doc_obj.raw()
+                else:
+                    doc_text = ''
+            else:
+                # Legacy Logic
+                doc_text = self.search_engine.get_document(doc_id)
             if doc_text:
                 documents.append(doc_text)
         
@@ -292,7 +314,22 @@ class AdaptiveIRPipeline:
         valid_doc_ids = []
         
         for doc_id in doc_ids:
-            doc_text = self.search_engine.get_document(doc_id)
+            # --- PATCHED FOR PYSERINI ---
+            if hasattr(self.search_engine, 'doc'):
+                # Pyserini Logic
+                doc_obj = self.search_engine.doc(doc_id)
+                if doc_obj:
+                    try:
+                        import json
+                        # Pyserini thường trả về JSON string, ta cần lấy trường 'contents'
+                        doc_text = json.loads(doc_obj.raw()).get('contents', doc_obj.raw())
+                    except:
+                        doc_text = doc_obj.raw()
+                else:
+                    doc_text = ''
+            else:
+                # Legacy Logic
+                doc_text = self.search_engine.get_document(doc_id)
             if doc_text:
                 documents.append(doc_text)
                 valid_doc_ids.append(doc_id)
@@ -405,7 +442,6 @@ class AdaptiveIRPipeline:
 
 
 if __name__ == "__main__":
-    # Test pipeline (requires actual components)
     print("Adaptive IR Pipeline module loaded successfully")
     print("To test the pipeline, you need:")
     print("  1. A search engine instance")
