@@ -12,12 +12,12 @@ data:
   data_dir: '../Query Reformulator'
   index_path: './data/msa_index'
 
+# Legacy Word2Vec embeddings
 embeddings:
-  type: 'sentence-transformers'           
-  path: 'sentence-transformers/all-mpnet-base-v2' 
-  embedding_dim: 384                      
-  freeze: true
-
+  type: 'legacy'
+  path: '../Query Reformulator/D_cbow_pdw_8B.pkl'
+  embedding_dim: 500
+  freeze: false
 
 # Candidate Mining - Optimized
 candidate_mining:
@@ -37,13 +37,10 @@ candidate_mining:
 # RL Agent - Optimized for GPU
 rl_agent:
   enabled: true
-  embedding_dim: 384          
-  embedding_type: 'sentence-transformers'
-  embedding_model: 'all-MiniLM-L6-v2'
-  use_pretrained_embeddings: true
-  hidden_dim: 1024            
-  num_heads: 8                
-  num_layers: 6               
+  embedding_dim: 500
+  hidden_dim: 256
+  num_heads: 4
+  num_layers: 2
   dropout: 0.1
   max_steps_per_episode: 5
   num_query_variants: 4
@@ -92,7 +89,6 @@ training:
   collect_batch_size: 32       # Episodes to collect in parallel
   episodes_per_update: 256     # Episodes before PPO update
   ppo_epochs: 4                # PPO epochs per update
-  use_amp: true                # Dùng FP16
   
   # Learning rate
   learning_rate: 0.0003
@@ -130,5 +126,5 @@ training:
   buffer_size: 50000
   
   # Caching
-  embedding_cache_size: 500000
+  embedding_cache_size: 200000
   search_cache_size: 10000

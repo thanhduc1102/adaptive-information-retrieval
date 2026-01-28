@@ -109,7 +109,7 @@ try:
     
     # Embed query
     query = "machine learning algorithms for information retrieval"
-    emb = embeddings.encode(query, convert_to_tensor=True)
+    emb = embeddings.encode(query, convert_to_tensor=True, show_progress_bar=False)
     
     print(f"  Example: '{query}'")
     print(f"  Embedding: shape={emb.shape}, norm={emb.norm().item():.4f}")
