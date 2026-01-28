@@ -15,7 +15,7 @@ data:
 embeddings:
   type: 'sentence-transformers'           
   path: 'sentence-transformers/all-mpnet-base-v2' 
-  embedding_dim: 768                      
+  embedding_dim: 384        ### if use legacy, set to 768 (have enough VRAM)               
   freeze: true
 
 
@@ -37,8 +37,9 @@ candidate_mining:
 # RL Agent - Optimized for GPU
 rl_agent:
   enabled: true
-  embedding_dim: 768          
+  embedding_dim: 384  ### if use legacy, set to 768 (have enough VRAM)        
   embedding_type: 'sentence-transformers'
+  embedding_model: 'all-MiniLM-L6-v2'
   use_pretrained_embeddings: true
   hidden_dim: 1024            
   num_heads: 8                

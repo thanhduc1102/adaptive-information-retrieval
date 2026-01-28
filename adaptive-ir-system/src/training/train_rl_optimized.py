@@ -638,7 +638,8 @@ class BatchedEpisodeCollector:
             actual_batch_size = len(batch_data)
             
             # Pad and stack tensors
-            batch_query_embs = torch.stack([d.query_emb for d in batch_data]).to(self.device)
+            # --- PATCHED: Fix mixed device error ---
+            batch_query_embs = torch.stack([d.query_emb.to(self.device) for d in batch_data])
             
             # Handle variable-length candidates with padding
             max_cands = max(d.num_candidates for d in batch_data)

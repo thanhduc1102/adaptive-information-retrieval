@@ -2,7 +2,6 @@
 Training package for Adaptive IR system.
 """
 
-from .train_rl import RLTrainingLoop, ReplayBuffer
 from .train_rl_optimized import (
     OptimizedRLTrainingLoop,
     OptimizedReplayBuffer,

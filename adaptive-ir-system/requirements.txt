@@ -27,3 +27,7 @@ python-dotenv==1.0.1
 colorlog==6.8.2
 nltk==3.8.1
 huggingface-hub==0.23.2
+
+faiss-cpu
+
+
