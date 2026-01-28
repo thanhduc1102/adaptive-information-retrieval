@@ -12,12 +12,12 @@ data:
   data_dir: '../Query Reformulator'
   index_path: './data/msa_index'
 
-# Legacy Word2Vec embeddings
 embeddings:
-  type: 'legacy'
-  path: '../Query Reformulator/D_cbow_pdw_8B.pkl'
-  embedding_dim: 500
-  freeze: false
+  type: 'sentence-transformers'           
+  path: 'sentence-transformers/all-mpnet-base-v2' 
+  embedding_dim: 768                      
+  freeze: true
+
 
 # Candidate Mining - Optimized
 candidate_mining:
@@ -37,10 +37,12 @@ candidate_mining:
 # RL Agent - Optimized for GPU
 rl_agent:
   enabled: true
-  embedding_dim: 500
-  hidden_dim: 256
-  num_heads: 4
-  num_layers: 2
+  embedding_dim: 768          
+  embedding_type: 'sentence-transformers'
+  use_pretrained_embeddings: true
+  hidden_dim: 1024            
+  num_heads: 8                
+  num_layers: 6               
   dropout: 0.1
   max_steps_per_episode: 5
   num_query_variants: 4

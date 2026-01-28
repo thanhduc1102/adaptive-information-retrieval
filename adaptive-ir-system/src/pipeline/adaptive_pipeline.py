@@ -442,6 +442,7 @@ class AdaptiveIRPipeline:
 
 
 if __name__ == "__main__":
+    # Test pipeline (requires actual components)
     print("Adaptive IR Pipeline module loaded successfully")
     print("To test the pipeline, you need:")
     print("  1. A search engine instance")
