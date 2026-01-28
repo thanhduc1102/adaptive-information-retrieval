@@ -45,7 +45,7 @@ uv pip install -r requirements.txt
 # uv pip install -r requirements.txt --system
 
 uv pip install --upgrade huggingface_hub transformers peft
-pip install --upgrade torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+uv pip install --upgrade torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
 ```
 
 ## 5. System Configuration (Java)
