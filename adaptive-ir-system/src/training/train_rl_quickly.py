@@ -691,31 +691,51 @@ class BatchedEpisodeCollector:
                     # Check if STOP action
                     done = (action_idx >= data.num_candidates)
                     
+                    selected_term = None
+                    candidate_features_dict = None
+                    
                     if not done:
                         # Add selected term
                         selected_term = data.candidate_terms[action_idx]
                         current_queries[i] = current_queries[i] + " " + selected_term
+                        
+                        # Get candidate features for reward computation
+                        feat_tensor = data.candidate_features[action_idx]
+                        candidate_features_dict = {
+                            'tfidf': feat_tensor[0].item() if feat_tensor.dim() > 0 else 0.0,
+                            'bm25_contrib': feat_tensor[1].item() if feat_tensor.dim() > 0 and feat_tensor.shape[0] > 1 else 0.0,
+                        }
                     
-                    # Compute reward
-                    # reward_fn can be either:
-                    # - compute_heuristic_reward(query, current, qrels, action, done) - fast
-                    # - compute_reward_cached(query, current, qrels) - slow but accurate
+                    # Compute reward using reward_fn
                     try:
-                        # Try heuristic reward first (5 args)
+                        # Try improved reward first (8 args)
                         reward = reward_fn(
                             data.query,
                             current_queries[i],
                             data.qrels,
                             action_idx,
-                            done
+                            done,
+                            selected_term,
+                            candidate_features_dict,
+                            step
                         )
                     except TypeError:
-                        # Fall back to cached reward (3 args)
-                        reward = reward_fn(
-                            data.query,
-                            current_queries[i],
-                            data.qrels
-                        )
+                        try:
+                            # Try heuristic reward (5 args)
+                            reward = reward_fn(
+                                data.query,
+                                current_queries[i],
+                                data.qrels,
+                                action_idx,
+                                done
+                            )
+                        except TypeError:
+                            # Fall back to cached reward (3 args)
+                            reward = reward_fn(
+                                data.query,
+                                current_queries[i],
+                                data.qrels
+                            )
                     batch_rewards[i] += reward
                     
                     # Store experience
@@ -855,8 +875,13 @@ class OptimizedRLTrainingLoop:
         self.logger.info(f"  Buffer Size: {buffer_size}")
         self.logger.info("=" * 60)
         
-        # Heuristic reward mode for faster training
-        self.use_heuristic_reward = config.get('training', {}).get('use_heuristic_reward', True)
+        # Reward mode: 'improved' (recommended), 'heuristic' (fast), 'search' (slow but accurate)
+        self.reward_mode = config.get('training', {}).get('reward_mode', 'improved')
+        self.use_heuristic_reward = config.get('training', {}).get('use_heuristic_reward', False)  # Deprecated
+        
+        # Precompute document texts for qrels (for relevance signal)
+        self.doc_texts_cache = {}
+        self._precompute_doc_cache_enabled = config.get('training', {}).get('precompute_doc_cache', False)
     
     def compute_heuristic_reward(
         self,
@@ -898,6 +923,80 @@ class OptimizedRLTrainingLoop:
                 reward = -0.02  # Penalty for too many terms
         
         return reward
+    
+    def compute_improved_reward(
+        self,
+        original_query: str,
+        current_query: str,
+        qrels: Dict[str, int],
+        action_idx: int,
+        done: bool,
+        selected_term: str = None,
+        candidate_features: Dict[str, float] = None,
+        step: int = 0
+    ) -> float:
+        """
+        Improved reward function với multiple signals:
+        1. Term quality signal (từ candidate features - TF-IDF, BM25)
+        2. Query length management
+        3. Step-based shaping
+        4. Done bonus/penalty
+        
+        Returns:
+            Scalar reward trong khoảng [-1, 1]
+        """
+        reward = 0.0
+        
+        original_tokens = set(original_query.lower().split())
+        current_tokens = set(current_query.lower().split())
+        added_tokens = current_tokens - original_tokens
+        num_added = len(added_tokens)
+        
+        if not done:
+            # === TERM SELECTION REWARD ===
+            
+            # 1. Term Quality Signal (sử dụng features đã compute)
+            if candidate_features is not None:
+                tfidf_score = candidate_features.get('tfidf', 0.0)
+                bm25_score = candidate_features.get('bm25_contrib', 0.0)
+                # Weighted term quality - scale to [0, 0.4]
+                term_quality = 0.6 * tfidf_score + 0.4 * bm25_score
+                reward += 0.4 * min(term_quality, 1.0)
+            else:
+                # Fallback: small positive reward for selecting any term
+                reward += 0.1
+            
+            # 2. Diversity bonus - thưởng terms mới
+            if selected_term and selected_term.lower() not in original_tokens:
+                reward += 0.1
+            
+            # 3. Length penalty - phạt query quá dài
+            if num_added > 4:
+                reward -= 0.15 * (num_added - 4)
+            
+            # 4. Step discount - khuyến khích chọn terms tốt sớm
+            step_discount = 0.95 ** step
+            reward *= step_discount
+            
+        else:
+            # === STOP ACTION REWARD ===
+            
+            # Reward dựa trên số terms đã thêm
+            if num_added == 0:
+                # Penalty cho stopping mà không expand
+                reward = -0.5
+            elif 1 <= num_added <= 3:
+                # Optimal range - bonus
+                reward = 0.3 + 0.1 * num_added
+            elif 4 <= num_added <= 5:
+                # Acceptable range
+                reward = 0.2
+            else:
+                # Too many terms - penalty
+                reward = 0.1 - 0.05 * (num_added - 5)
+        
+        # Clamp reward to [-1, 1]
+        return max(-1.0, min(1.0, reward))
     
     def compute_reward_cached(
         self,
@@ -973,7 +1072,10 @@ class OptimizedRLTrainingLoop:
         )
         
         # Choose reward function based on config
-        if self.use_heuristic_reward:
+        if self.reward_mode == 'improved':
+            reward_fn = self.compute_improved_reward
+            self.logger.info("Using improved reward (term quality + shaping)")
+        elif self.reward_mode == 'heuristic' or self.use_heuristic_reward:
             reward_fn = self.compute_heuristic_reward
             self.logger.info("Using heuristic reward (fast mode)")
         else:

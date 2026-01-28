@@ -106,6 +106,9 @@ training:
   pin_memory: true             # Faster CPU->GPU transfer
   prefetch_factor: 4           # Prefetch batches
   
+  # Reward Configuration - NEW
+  reward_mode: 'improved'      # 'improved' (recommended), 'heuristic', 'search'
+  
   # Reward shaping
   reward_weights:
     recall: 0.7
