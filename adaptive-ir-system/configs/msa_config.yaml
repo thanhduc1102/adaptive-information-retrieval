@@ -129,5 +129,5 @@ training:
   buffer_size: 50000
   
   # Caching
-  embedding_cache_size: 200000
+  embedding_cache_size: 500000
   search_cache_size: 10000
