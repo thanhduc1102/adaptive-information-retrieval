@@ -7,7 +7,7 @@ This guide provides step-by-step instructions to set up the environment, downloa
 First, clone the specific branch of the project and navigate into the directory.
 
 ```bash
-git clone -b nnminh322_optim [https://github.com/thanhduc1102/adaptive-information-retrieval](https://github.com/thanhduc1102/adaptive-information-retrieval)
+git clone -b nnminh322_optim https://github.com/thanhduc1102/adaptive-information-retrieval
 
 cd adaptive-information-retrieval
 ```
