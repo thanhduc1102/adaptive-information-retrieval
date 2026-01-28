@@ -10,7 +10,7 @@ Sử dụng các module đã xây dựng trong src/
 Cách sử dụng:
     python evaluate_baseline.py                    # Đánh giá trên valid
     python evaluate_baseline.py --split test       # Đánh giá trên test
-    python evaluate_baseline.py --max-queries 500  # Giới hạn số queries
+    python evaluate_baseline.py --max-queries 100  # Giới hạn số queries
 
 Author: Adaptive IR System
 """
