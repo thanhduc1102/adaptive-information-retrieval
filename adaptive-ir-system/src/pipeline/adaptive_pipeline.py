@@ -440,7 +440,6 @@ class AdaptiveIRPipeline:
         result['results'] = reranked_results[:top_k]
         
         return result
-    
     def _embed_text(self, text: str) -> torch.Tensor:
         """
         Embed text using embedding model.
@@ -452,13 +451,14 @@ class AdaptiveIRPipeline:
             Embedding tensor [embedding_dim]
         """
         if self.embedding_model is None:
-            # Fallback: random embedding (for testing)
             embedding_dim = self.config.get('rl_agent', {}).get('embedding_dim', 512)
             return torch.randn(embedding_dim)
         
-        # Use actual embedding model
-        return self.embedding_model.encode(text, convert_to_tensor=True, show_progress_bar=False)
-    
+        try:
+            return self.embedding_model.encode(text, convert_to_tensor=True, show_progress_bar=False)
+        except TypeError:
+            return self.embedding_model.encode(text, convert_to_tensor=True)
+       
     def load_rl_checkpoint(self, checkpoint_path: str):
         """Load RL agent from checkpoint."""
         if self.rl_agent:

@@ -20,7 +20,7 @@ rm -rf ./Query\ Reformulator/
 
 # Setup Kaggle directory and API token
 mkdir -p ~/.kaggle
-echo '{"username":"YOUR_KAGGLE_USER_NAME","key":"YOUR_KAGGLE_KEY"}' > ~/.kaggle/kaggle.json
+echo '{"username":"natmin322","key":"5d6d893e82b5de8808fdb07893bcf750"}' > ~/.kaggle/kaggle.json
 ```
 
 ## 3. Download Dataset
@@ -68,4 +68,7 @@ python train.py --config ./configs/msa_config.yaml --epochs 50
 
 # If you want to using old model (D_cbow_pdw_8B base on word2vec 2013) ~ 8h for 1 full epoch with 271k sample (at GPU T4)
 python train_quickly.py --config ./configs/msa_quick_config.yaml --batch-size 64 --epochs 50
+
+# If you just want to smoke test (D_cbow_pdw_8B) for 1k sample (you can specify num of sample in smoke config)'
+python train_smoke.py --config ./configs/msa_smoke_config.yaml
 ```
