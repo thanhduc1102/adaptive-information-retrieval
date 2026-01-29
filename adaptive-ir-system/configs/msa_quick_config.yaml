@@ -114,7 +114,7 @@ training:
   
   # Checkpointing
   checkpoint_dir: './checkpoints_msa_optimized'
-  save_freq: 5
+  save_freq: 1
   
   # Early stopping
   early_stopping_patience: 10
