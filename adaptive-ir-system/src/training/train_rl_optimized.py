@@ -98,10 +98,10 @@ class EmbeddingCache:
             embedding = torch.randn(500)  # Default dim
         elif self.is_legacy:
             # Legacy Word2Vec adapter
-            embedding = self.embedding_model.encode(text, convert_to_tensor=True, show_progress_bar=False)
+            embedding = self.embedding_model.encode(text, convert_to_tensor=True)
         else:
             # Sentence-transformers
-            embedding = self.embedding_model.encode(text, convert_to_tensor=True, show_progress_bar=False)
+            embedding = self.embedding_model.encode(text, convert_to_tensor=True)
         
         with self.lock:
             if len(self.cache) < self.max_size:
@@ -142,7 +142,7 @@ class EmbeddingCache:
             elif self.is_legacy:
                 # Legacy adapter - process one by one (no batch support)
                 for idx, text in zip(indices_to_compute, texts_to_compute):
-                    emb = self.embedding_model.encode(text, convert_to_tensor=True, show_progress_bar=False)
+                    emb = self.embedding_model.encode(text, convert_to_tensor=True)
                     if not isinstance(emb, torch.Tensor):
                         emb = torch.tensor(emb)
                     # --- PATCHED: Hazqndle both Tensor and NumPy ---
@@ -167,7 +167,6 @@ class EmbeddingCache:
                     texts_to_compute, 
                     convert_to_tensor=False,
                     batch_size=128,
-                    show_progress_bar=False
                 )
                 
                 # Add to results and cache

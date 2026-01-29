@@ -77,7 +77,6 @@ class BERTReranker:
         scores = self.model.predict(
             pairs,
             batch_size=self.batch_size,
-            show_progress_bar=False,
             convert_to_numpy=True
         )
         
@@ -195,7 +194,6 @@ class BERTReranker:
         scores = self.model.predict(
             pairs,
             batch_size=self.batch_size,
-            show_progress_bar=False,
             convert_to_numpy=True
         )
         

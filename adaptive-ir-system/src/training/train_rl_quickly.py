@@ -1270,32 +1270,69 @@ class OptimizedRLTrainingLoop:
         
         return metrics
     
-    def evaluate(self, dataset, split: str = 'val') -> Dict[str, float]:
+    def evaluate(self, dataset, split: str = 'val', use_optimized: bool = True, sample_size: int = None) -> Dict[str, float]:
         """
         Evaluate on validation/test set.
+        
+        Args:
+            dataset: Dataset to evaluate on
+            split: Split name ('val', 'test')
+            use_optimized: Use fast BM25-only eval (default True)
+            sample_size: Limit to N queries (None = all)
         """
         self.pipeline.enable_eval_mode()
         
         queries = dataset.load_queries()
         qrels = dataset.load_qrels()
         
+        # Sample queries if requested
+        if sample_size and sample_size < len(queries):
+            query_ids = list(queries.keys())[:sample_size]
+            queries = {qid: queries[qid] for qid in query_ids}
+            qrels = {qid: qrels[qid] for qid in query_ids if qid in qrels}
+            self.logger.info(f"Sampling {sample_size} queries for evaluation")
+        
         evaluator = IRMetricsAggregator()
         
-        for query_id, query in tqdm(queries.items(), desc=f"Evaluating {split}"):
-            qrel = qrels.get(query_id, {})
-            if not qrel:
-                continue
+        if use_optimized:
+            # Fast BM25-only evaluation (skip BERT re-ranking and full candidate mining)
+            self.logger.info(f"Using optimized evaluation (BM25 only) for {len(queries)} queries")
             
-            result = self.pipeline.search(query, top_k=100)
-            doc_ids = [doc_id for doc_id, _ in result['results']]
+            for query_id, query in tqdm(queries.items(), desc=f"Evaluating {split}", disable=False):
+                qrel = qrels.get(query_id, {})
+                if not qrel:
+                    continue
+                
+                # Simple BM25 retrieval without reformulation
+                doc_ids_scores = self.pipeline.retrieve(query, top_k=100)
+                doc_ids = [doc_id for doc_id, _ in doc_ids_scores]
+                
+                relevant_set = set(qrel.keys())
+                evaluator.add_query_result(
+                    query_id=query_id,
+                    retrieved=doc_ids,
+                    relevant=relevant_set,
+                    relevant_grades=qrel
+                )
+        else:
+            # Full pipeline evaluation (slow - with BERT re-ranking)
+            self.logger.info(f"Using full pipeline evaluation for {len(queries)} queries")
             
-            relevant_set = set(qrel.keys())
-            evaluator.add_query_result(
-                query_id=query_id,
-                retrieved=doc_ids,
-                relevant=relevant_set,
-                relevant_grades=qrel
-            )
+            for query_id, query in tqdm(queries.items(), desc=f"Evaluating {split}", disable=False):
+                qrel = qrels.get(query_id, {})
+                if not qrel:
+                    continue
+                
+                result = self.pipeline.search(query, top_k=100)
+                doc_ids = [doc_id for doc_id, _ in result['results']]
+                
+                relevant_set = set(qrel.keys())
+                evaluator.add_query_result(
+                    query_id=query_id,
+                    retrieved=doc_ids,
+                    relevant=relevant_set,
+                    relevant_grades=qrel
+                )
         
         return evaluator.compute_aggregate()
     
@@ -1339,13 +1376,36 @@ class OptimizedRLTrainingLoop:
             
             # Validation
             if (epoch + 1) % self.save_freq == 0:
-                val_metrics = self.evaluate(self.val_dataset, 'val')
+                self.logger.info(f"\n{'='*60}")
+                self.logger.info(f"Running validation (epoch {epoch+1})...")
+                
+                # Use optimized evaluation by default
+                # For final epoch, can optionally use full pipeline
+                use_optimized_eval = True
+                eval_sample_size = None  # None = all queries
+                
+                # Optionally sample for faster validation during training
+                if self.config.get('training', {}).get('fast_validation', True):
+                    # Sample 10% of validation set for speed (min 100, max 2000)
+                    total_queries = len(self.val_dataset.load_queries())
+                    eval_sample_size = max(100, min(2000, int(total_queries * 0.1)))
+                    self.logger.info(f"Fast validation mode: evaluating {eval_sample_size}/{total_queries} queries")
+                
+                val_metrics = self.evaluate(
+                    self.val_dataset, 
+                    'val',
+                    use_optimized=use_optimized_eval,
+                    sample_size=eval_sample_size
+                )
                 
                 self.logger.info(
-                    f"Validation | "
-                    f"Recall@100: {val_metrics['recall@100']:.4f} | "
-                    f"MRR: {val_metrics['mrr']:.4f}"
+                    f"Validation Results | "
+                    f"Recall@10: {val_metrics.get('recall@10', 0):.4f} | "
+                    f"Recall@100: {val_metrics.get('recall@100', 0):.4f} | "
+                    f"MRR: {val_metrics.get('mrr', 0):.4f} | "
+                    f"nDCG@10: {val_metrics.get('ndcg@10', 0):.4f}"
                 )
+                self.logger.info(f"{'='*60}\n")
                 
                 # Save checkpoint
                 checkpoint_path = self.checkpoint_dir / f"checkpoint_epoch_{epoch+1}.pt"
@@ -1389,13 +1449,20 @@ class OptimizedRLTrainingLoop:
         # Always run final validation if we have validation data
         if self.val_dataset and best_metric == 0.0:
             self.logger.info("Running final validation (skipped during training)...")
-            val_metrics = self.evaluate(self.val_dataset, 'val')
+            self.logger.info("Using FULL validation set (not sampled)...")
+            val_metrics = self.evaluate(
+                self.val_dataset, 
+                'val',
+                use_optimized=True,  # Fast BM25-only
+                sample_size=None     # Full set
+            )
             self.logger.info(
                 f"Final Validation | "
-                f"Recall@100: {val_metrics['recall@100']:.4f} | "
-                f"MRR: {val_metrics['mrr']:.4f}"
+                f"Recall@10: {val_metrics.get('recall@10', 0):.4f} | "
+                f"Recall@100: {val_metrics.get('recall@100', 0):.4f} | "
+                f"MRR: {val_metrics.get('mrr', 0):.4f}"
             )
-            best_metric = val_metrics['mrr']
+            best_metric = val_metrics.get('mrr', 0)
         
         # Always save final model checkpoint
         final_checkpoint_path = self.checkpoint_dir / "final_model.pt"
@@ -1422,22 +1489,35 @@ class OptimizedRLTrainingLoop:
         
         # Final test evaluation
         if self.test_dataset:
+            self.logger.info("=" * 60)
             self.logger.info("Running final test evaluation...")
+            self.logger.info("Note: Using optimized BM25-only evaluation for speed")
+            self.logger.info("For full pipeline metrics with BERT, use eval_checkpoint.py")
+            self.logger.info("=" * 60)
             
             if best_path.exists():
                 load_checkpoint(self.rl_trainer.agent_module, best_path)
             
-            test_metrics = self.evaluate(self.test_dataset, 'test')
+            test_metrics = self.evaluate(
+                self.test_dataset, 
+                'test',
+                use_optimized=True,  # Fast BM25-only
+                sample_size=None     # Full test set
+            )
             
             self.logger.info(
-                f"Test Results | "
-                f"Recall@100: {test_metrics['recall@100']:.4f} | "
-                f"MRR: {test_metrics['mrr']:.4f}"
+                f"\nTest Results | "
+                f"Recall@10: {test_metrics.get('recall@10', 0):.4f} | "
+                f"Recall@100: {test_metrics.get('recall@100', 0):.4f} | "
+                f"MRR: {test_metrics.get('mrr', 0):.4f} | "
+                f"nDCG@10: {test_metrics.get('ndcg@10', 0):.4f}"
             )
             
             # Save test results
             with open(self.checkpoint_dir / "test_results.json", 'w') as f:
                 json.dump(test_metrics, f, indent=2)
+            
+            self.logger.info("=" * 60)
         
         self.logger.info("Training completed!")
         

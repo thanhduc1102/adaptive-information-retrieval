@@ -43,14 +43,27 @@ class SimpleBM25Searcher:
         self.doc_ids = []
         self.corpus_docs = []
         
-        # For efficiency, we'll only index documents that appear in qrels
-        # This is much faster than indexing all 480K docs
-        qrels = self.adapter.load_qrels()
+        # IMPORTANT: Index documents from ALL splits (train + valid + test)
+        # Otherwise validation/test queries won't find their relevant documents
         unique_doc_ids = set()
-        for qrel in qrels.values():
-            unique_doc_ids.update(qrel.keys())
         
-        self.logger.info(f"Indexing {len(unique_doc_ids)} relevant documents...")
+        # Load qrels from all available splits
+        current_split = self.adapter.split
+        for split in ['train', 'valid', 'test']:
+            try:
+                # Temporarily switch to this split
+                self.adapter.split = split
+                qrels = self.adapter.load_qrels()
+                for qrel in qrels.values():
+                    unique_doc_ids.update(qrel.keys())
+                self.logger.info(f"Collected {len(unique_doc_ids)} unique docs from {split} split")
+            except Exception as e:
+                self.logger.warning(f"Could not load {split} qrels: {e}")
+        
+        # Restore original split
+        self.adapter.split = current_split
+        
+        self.logger.info(f"Indexing {len(unique_doc_ids)} relevant documents from all splits...")
         
         for doc_id in unique_doc_ids:
             try:

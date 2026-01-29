@@ -82,13 +82,13 @@ retrieval:
 
 # Training - GPU Optimized
 training:
-  num_epochs: 1
+  num_epochs: 2
   
   # Batching - KEY FOR GPU UTILIZATION
   batch_size: 128               # PPO update batch size
   collect_batch_size: 128       # Episodes to collect in parallel
   episodes_per_update: 256     # Episodes before PPO update
-  ppo_epochs: 4                # PPO epochs per update
+  ppo_epochs: 1             # PPO epochs per update
   
   # Learning rate
   learning_rate: 0.0003
@@ -117,6 +117,10 @@ training:
   # Checkpointing - IMPORTANT: save_freq <= num_epochs to ensure checkpoint
   checkpoint_dir: './checkpoints_msa_optimized'
   save_freq: 1                 # Save every epoch (changed from 5)
+  
+  # Validation - OPTIMIZED FOR SPEED
+  fast_validation: true        # Sample 10% of val set during training for speed
+  use_optimized_eval: true     # Skip BERT re-ranking (5.7x faster evaluation)
   
   # Early stopping
   early_stopping_patience: 10

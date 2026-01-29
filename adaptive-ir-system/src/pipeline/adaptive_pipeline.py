@@ -105,22 +105,20 @@ class AdaptiveIRPipeline:
         
         results = self.search_engine.search(query, top_k)
         
+        # Handle empty results
+        if not results:
+            return [], []
+        
         # --- PATCHED FOR PYSERINI ---
-        if results and hasattr(results[0], 'docid'):
+        # Check result format: Pyserini objects vs dict
+        if hasattr(results[0], 'docid'):
             # Pyserini returns objects with attributes
             doc_ids = [r.docid for r in results]
             scores = [r.score for r in results]
         else:
-            # Legacy returns dictionaries
-            # --- PATCHED FOR PYSERINI ---
-            if results and hasattr(results[0], 'docid'):
-                # Pyserini returns objects with attributes
-                doc_ids = [r.docid for r in results]
-                scores = [r.score for r in results]
-            else:
-                # Legacy returns dictionaries
-                doc_ids = [r['doc_id'] for r in results]
-                scores = [r['score'] for r in results]
+            # SimpleBM25Searcher or legacy returns dictionaries
+            doc_ids = [r['doc_id'] for r in results]
+            scores = [r['score'] for r in results]
         
         return doc_ids, scores
     
@@ -150,35 +148,24 @@ class AdaptiveIRPipeline:
         for doc_id in doc_ids:
             # --- PATCHED FOR PYSERINI ---
             if hasattr(self.search_engine, 'doc'):
-                # Pyserini Logic
+                # Pyserini or SimpleBM25Searcher (both have .doc() method)
                 doc_obj = self.search_engine.doc(doc_id)
                 if doc_obj:
                     try:
                         import json
-                        # Pyserini thường trả về JSON string, ta cần lấy trường 'contents'
+                        # Try to parse as JSON (Pyserini format)
                         doc_text = json.loads(doc_obj.raw()).get('contents', doc_obj.raw())
                     except:
+                        # Plain text (SimpleBM25Searcher format)
                         doc_text = doc_obj.raw()
                 else:
                     doc_text = ''
+            elif hasattr(self.search_engine, 'get_document'):
+                # Fallback: direct get_document method
+                doc_text = self.search_engine.get_document(doc_id)
             else:
-                # Legacy Logic
-                # --- PATCHED FOR PYSERINI ---
-                if hasattr(self.search_engine, 'doc'):
-                    # Pyserini Logic
-                    doc_obj = self.search_engine.doc(doc_id)
-                    if doc_obj:
-                        try:
-                            import json
-                            # Pyserini thường trả về JSON string, ta cần lấy trường 'contents'
-                            doc_text = json.loads(doc_obj.raw()).get('contents', doc_obj.raw())
-                        except:
-                            doc_text = doc_obj.raw()
-                    else:
-                        doc_text = ''
-                else:
-                    # Legacy Logic
-                    doc_text = self.search_engine.get_document(doc_id)
+                doc_text = ''
+            
             if doc_text:
                 documents.append(doc_text)
         
@@ -338,35 +325,24 @@ class AdaptiveIRPipeline:
         for doc_id in doc_ids:
             # --- PATCHED FOR PYSERINI ---
             if hasattr(self.search_engine, 'doc'):
-                # Pyserini Logic
+                # Pyserini or SimpleBM25Searcher (both have .doc() method)
                 doc_obj = self.search_engine.doc(doc_id)
                 if doc_obj:
                     try:
                         import json
-                        # Pyserini thường trả về JSON string, ta cần lấy trường 'contents'
+                        # Try to parse as JSON (Pyserini format)
                         doc_text = json.loads(doc_obj.raw()).get('contents', doc_obj.raw())
                     except:
+                        # Plain text (SimpleBM25Searcher format)
                         doc_text = doc_obj.raw()
                 else:
                     doc_text = ''
+            elif hasattr(self.search_engine, 'get_document'):
+                # Fallback: direct get_document method
+                doc_text = self.search_engine.get_document(doc_id)
             else:
-                # Legacy Logic
-                # --- PATCHED FOR PYSERINI ---
-                if hasattr(self.search_engine, 'doc'):
-                    # Pyserini Logic
-                    doc_obj = self.search_engine.doc(doc_id)
-                    if doc_obj:
-                        try:
-                            import json
-                            # Pyserini thường trả về JSON string, ta cần lấy trường 'contents'
-                            doc_text = json.loads(doc_obj.raw()).get('contents', doc_obj.raw())
-                        except:
-                            doc_text = doc_obj.raw()
-                    else:
-                        doc_text = ''
-                else:
-                    # Legacy Logic
-                    doc_text = self.search_engine.get_document(doc_id)
+                doc_text = ''
+            
             if doc_text:
                 documents.append(doc_text)
                 valid_doc_ids.append(doc_id)
@@ -457,7 +433,7 @@ class AdaptiveIRPipeline:
             return torch.randn(embedding_dim)
         
         # Use actual embedding model
-        return self.embedding_model.encode(text, convert_to_tensor=True, show_progress_bar=False)
+        return self.embedding_model.encode(text, convert_to_tensor=True)
     
     def load_rl_checkpoint(self, checkpoint_path: str):
         """Load RL agent from checkpoint."""

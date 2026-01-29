@@ -34,7 +34,7 @@ from src.rl_agent import QueryReformulatorAgent
 from src.pipeline import AdaptiveIRPipeline
 from src.evaluation import IRMetricsAggregator
 from src.utils import setup_logging, load_checkpoint
-from src.utils.legacy_loader import LegacyDataAdapter
+from src.utils.legacy_loader import LegacyDatasetAdapter
 
 
 def setup_java():
@@ -112,11 +112,68 @@ def evaluate_checkpoint(
         print(f"Device: {device}")
         print(f"{'='*60}\n")
     
+    # Load dataset first
+    if verbose:
+        print(f"📊 Loading {split} data...")
+    
+    data_config = config.get('data', {})
+    dataset_path = data_config.get('dataset_path', '../Query Reformulator/msa_dataset.hdf5')
+    corpus_path = data_config.get('corpus_path', '../Query Reformulator/msa_corpus.hdf5')
+    
+    dataset = LegacyDatasetAdapter(
+        dataset_path=dataset_path,
+        corpus_path=corpus_path,
+        split=split
+    )
+    
+    queries = dataset.load_queries()
+    qrels = dataset.load_qrels()
+    
+    if num_queries:
+        query_ids = list(queries.keys())[:num_queries]
+        queries = {qid: queries[qid] for qid in query_ids}
+        qrels = {qid: qrels[qid] for qid in query_ids if qid in qrels}
+    
+    if verbose:
+        print(f"  Queries: {len(queries)}")
+        print(f"  Queries with qrels: {len(qrels)}")
+    
+    # Setup search engine
+    if verbose:
+        print(f"\n🔍 Setting up search engine...")
+    
+    dataset_type = config['data'].get('dataset_type', 'msa')
+    
+    if dataset_type in ['msa', 'trec-car', 'jeopardy', 'legacy', 'hdf5']:
+        from src.utils.simple_searcher import SimpleBM25Searcher
+        
+        search_engine = SimpleBM25Searcher(
+            dataset,
+            k1=config.get('retrieval', {}).get('bm25_k1', 0.9),
+            b=config.get('retrieval', {}).get('bm25_b', 0.4)
+        )
+    else:
+        from pyserini.search.lucene import LuceneSearcher
+        
+        index_path = config['data'].get('index_path', './data/msa_index')
+        if not Path(index_path).exists():
+            raise FileNotFoundError(f"Index not found at {index_path}")
+        
+        search_engine = LuceneSearcher(index_path)
+        search_engine.set_bm25(
+            config.get('retrieval', {}).get('bm25_k1', 0.9),
+            config.get('retrieval', {}).get('bm25_b', 0.4)
+        )
+    
     # Initialize pipeline
     if verbose:
         print("📦 Initializing pipeline...")
     
-    pipeline = AdaptiveIRPipeline(config)
+    pipeline = AdaptiveIRPipeline(
+        config=config,
+        search_engine=search_engine,
+        embedding_model=None
+    )
     
     # Load checkpoint
     if verbose:
@@ -138,32 +195,6 @@ def evaluate_checkpoint(
         print(f"  Epoch: {checkpoint['epoch']}")
     if verbose and 'metrics' in checkpoint:
         print(f"  Saved metrics: {checkpoint['metrics']}")
-    
-    # Load dataset
-    if verbose:
-        print(f"\n📊 Loading {split} data...")
-    
-    data_config = config.get('data', {})
-    dataset_path = data_config.get('dataset_path')
-    corpus_path = data_config.get('corpus_path', dataset_path)
-    
-    dataset = LegacyDataAdapter(
-        dataset_path=dataset_path,
-        corpus_path=corpus_path,
-        split=split
-    )
-    
-    queries = dataset.load_queries()
-    qrels = dataset.load_qrels()
-    
-    if num_queries:
-        query_ids = list(queries.keys())[:num_queries]
-        queries = {qid: queries[qid] for qid in query_ids}
-        qrels = {qid: qrels[qid] for qid in query_ids if qid in qrels}
-    
-    if verbose:
-        print(f"  Queries: {len(queries)}")
-        print(f"  Queries with qrels: {len(qrels)}")
     
     # Evaluate
     if verbose:
