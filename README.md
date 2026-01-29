@@ -60,12 +60,91 @@ export JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64
 
 
 ## 6. Training
-Run the training script with the specified configuration.
+
+### Quick Training (Recommended)
+Run the training script with the optimized configuration.
 
 ```bash
-# If you want to using modern modal (as sentence-transformers/all-mpnet-base-v2 2019). ~ 25h for 1 full epoch with 271k sample (at GPU T4)
-python train.py --config ./configs/msa_config.yaml --epochs 50 
-
-# If you want to using old model (D_cbow_pdw_8B base on word2vec 2013) ~ 8h for 1 full epoch with 271k sample (at GPU T4)
-python train_quickly.py --config ./configs/msa_quick_config.yaml --batch-size 64 --epochs 50
+# Using legacy Word2Vec model (D_cbow_pdw_8B) - ~4.5h per epoch with 271k queries (2x T4 GPU)
+python train_quickly.py --config ./configs/msa_quick_config.yaml --epochs 10
 ```
+
+### Training with Modern Embeddings
+```bash
+# Using sentence-transformers (all-mpnet-base-v2) - ~25h per epoch with 271k queries (T4 GPU)
+python train.py --config ./configs/msa_config.yaml --epochs 50 
+```
+
+### Key Improvements (v1.1)
+- **Relevance-based Reward Signal**: Agent now learns to select terms that appear in relevant documents
+- **HuggingFace Integration**: Auto-upload best model to HuggingFace Hub
+- **Checkpoint Every Epoch**: All checkpoints saved for analysis
+- **POC Test Script**: Verify setup before full training
+
+## 7. POC Test (Optional but Recommended)
+Before full training, verify all components work correctly:
+
+```bash
+cd adaptive-ir-system
+python poc_test.py
+```
+
+This will test:
+- Dataset loading
+- Embedding model
+- Candidate mining
+- Relevance signal extraction
+- Reward function
+- HuggingFace config
+
+## 8. Checkpoint Evaluation
+Conveniently evaluate any checkpoint:
+
+```bash
+# Evaluate on validation set
+python eval_checkpoint.py --checkpoint checkpoints_msa_optimized/best_model.pt --split valid
+
+# Evaluate on test set  
+python eval_checkpoint.py --checkpoint checkpoints_msa_optimized/best_model.pt --split test
+
+# Download and evaluate from HuggingFace
+python eval_checkpoint.py --hf-model username/model-name --split test
+```
+
+## 9. HuggingFace Upload (Optional)
+To automatically upload checkpoints to HuggingFace:
+
+1. Edit `configs/msa_quick_config.yaml`:
+```yaml
+huggingface:
+  enabled: true
+  repo_id: 'your-username/adaptive-ir-model'
+  token: 'hf_your_token_here'  # Or set HF_TOKEN env var
+  private: false
+```
+
+2. Or use environment variable:
+```bash
+export HF_TOKEN="your_huggingface_token"
+```
+
+## 10. Configuration Details
+
+Key settings in `configs/msa_quick_config.yaml`:
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `training.num_epochs` | 10 | Number of training epochs |
+| `training.batch_size` | 128 | PPO mini-batch size |
+| `training.collect_batch_size` | 128 | Episode collection batch size |
+| `training.save_freq` | 1 | Save checkpoint every N epochs |
+| `training.reward_mode` | 'improved' | Reward function mode |
+| `training.use_amp` | true | Mixed precision (FP16) |
+| `huggingface.enabled` | false | Auto-upload to HuggingFace |
+
+## Checkpoints
+Saved to `checkpoints_msa_optimized/`:
+- `checkpoint_epoch_N.pt` - Checkpoint after epoch N
+- `best_model.pt` - Best model by MRR
+- `final_model.pt` - Final model after training
+- `test_results.json` - Test metrics (if `--test` flag used)

@@ -59,6 +59,7 @@ class EpisodeData:
     candidate_features: torch.Tensor
     qrels: Dict[str, int]
     num_candidates: int
+    relevant_terms: Set[str] = None  # Terms from relevant documents
 
 
 class EmbeddingCache:
@@ -537,15 +538,48 @@ class BatchedEpisodeCollector:
         embedding_cache: EmbeddingCache,
         device: str = 'cuda',
         max_candidates: int = 50,
-        max_steps: int = 5
+        max_steps: int = 5,
+        dataset = None  # Reference to dataset for relevant term extraction
     ):
         self.pipeline = pipeline
         self.embedding_cache = embedding_cache
         self.device = device
         self.max_candidates = max_candidates
         self.max_steps = max_steps
+        self.dataset = dataset
+        
+        # Cache for relevant terms per query (to avoid recomputing)
+        self.relevant_terms_cache = {}
         
         self.logger = logging.getLogger(__name__)
+    
+    def _extract_relevant_terms(self, qrels: Dict[str, int]) -> Set[str]:
+        """
+        Extract unique terms from relevant documents.
+        
+        Args:
+            qrels: {doc_id: relevance} mapping
+            
+        Returns:
+            Set of terms appearing in relevant documents
+        """
+        if self.dataset is None:
+            return set()
+        
+        terms = set()
+        for doc_id in qrels.keys():
+            try:
+                doc_text = self.dataset.get_document(doc_id)
+                if doc_text and not doc_text.startswith("Document ID:"):
+                    # Tokenize and add terms
+                    tokens = doc_text.lower().split()
+                    # Filter: only alphanumeric, length 2-20
+                    tokens = [t for t in tokens if t.isalnum() and 2 <= len(t) <= 20]
+                    terms.update(tokens)
+            except Exception:
+                continue
+        
+        return terms
     
     def prepare_episode_data(
         self,
@@ -575,6 +609,17 @@ class BatchedEpisodeCollector:
         )
         candidate_features = torch.tensor(feature_matrix, dtype=torch.float32)
         
+        # Extract relevant terms from documents (for improved reward)
+        # Use cache to avoid recomputing for same qrels
+        qrels_key = tuple(sorted(qrels.keys()))
+        if qrels_key in self.relevant_terms_cache:
+            relevant_terms = self.relevant_terms_cache[qrels_key]
+        else:
+            relevant_terms = self._extract_relevant_terms(qrels)
+            # Cache only if not too large (limit cache size)
+            if len(self.relevant_terms_cache) < 50000:
+                self.relevant_terms_cache[qrels_key] = relevant_terms
+        
         return EpisodeData(
             query_id=query_id,
             query=query,
@@ -583,7 +628,8 @@ class BatchedEpisodeCollector:
             candidate_embs=candidate_embs,
             candidate_features=candidate_features,
             qrels=qrels,
-            num_candidates=len(candidate_terms)
+            num_candidates=len(candidate_terms),
+            relevant_terms=relevant_terms
         )
     
     def prepare_batch_parallel(
@@ -708,7 +754,7 @@ class BatchedEpisodeCollector:
                     
                     # Compute reward using reward_fn
                     try:
-                        # Try improved reward first (8 args)
+                        # Try improved reward first (9 args with relevant_terms)
                         reward = reward_fn(
                             data.query,
                             current_queries[i],
@@ -717,25 +763,39 @@ class BatchedEpisodeCollector:
                             done,
                             selected_term,
                             candidate_features_dict,
-                            step
+                            step,
+                            data.relevant_terms  # Pass relevant terms for relevance signal
                         )
                     except TypeError:
                         try:
-                            # Try heuristic reward (5 args)
+                            # Try without relevant_terms (8 args)
                             reward = reward_fn(
                                 data.query,
                                 current_queries[i],
                                 data.qrels,
                                 action_idx,
-                                done
+                                done,
+                                selected_term,
+                                candidate_features_dict,
+                                step
                             )
                         except TypeError:
-                            # Fall back to cached reward (3 args)
-                            reward = reward_fn(
-                                data.query,
-                                current_queries[i],
-                                data.qrels
-                            )
+                            try:
+                                # Try heuristic reward (5 args)
+                                reward = reward_fn(
+                                    data.query,
+                                    current_queries[i],
+                                    data.qrels,
+                                    action_idx,
+                                    done
+                                )
+                            except TypeError:
+                                # Fall back to cached reward (3 args)
+                                reward = reward_fn(
+                                    data.query,
+                                    current_queries[i],
+                                    data.qrels
+                                )
                     batch_rewards[i] += reward
                     
                     # Store experience
@@ -845,7 +905,8 @@ class OptimizedRLTrainingLoop:
             embedding_cache=self.embedding_cache,
             device=self.device,
             max_candidates=self.max_candidates,
-            max_steps=self.max_steps
+            max_steps=self.max_steps,
+            dataset=train_dataset  # Pass dataset for relevant term extraction
         )
         
         # Checkpointing
@@ -882,6 +943,25 @@ class OptimizedRLTrainingLoop:
         # Precompute document texts for qrels (for relevance signal)
         self.doc_texts_cache = {}
         self._precompute_doc_cache_enabled = config.get('training', {}).get('precompute_doc_cache', False)
+        
+        # HuggingFace upload config
+        self.hf_config = config.get('huggingface', {})
+        self.hf_enabled = self.hf_config.get('enabled', False)
+        self.hf_repo_id = self.hf_config.get('repo_id', None)
+        self.hf_token = self.hf_config.get('token', None)
+        self.hf_uploader = None
+        
+        if self.hf_enabled and self.hf_repo_id:
+            try:
+                from ..utils.huggingface_uploader import HuggingFaceUploader
+                self.hf_uploader = HuggingFaceUploader(
+                    repo_id=self.hf_repo_id,
+                    token=self.hf_token,
+                    private=self.hf_config.get('private', False)
+                )
+                self.logger.info(f"🔗 HuggingFace upload enabled: {self.hf_repo_id}")
+            except Exception as e:
+                self.logger.warning(f"⚠️ HuggingFace upload disabled: {e}")
     
     def compute_heuristic_reward(
         self,
@@ -933,14 +1013,24 @@ class OptimizedRLTrainingLoop:
         done: bool,
         selected_term: str = None,
         candidate_features: Dict[str, float] = None,
-        step: int = 0
+        step: int = 0,
+        relevant_terms: Set[str] = None
     ) -> float:
         """
         Improved reward function với multiple signals:
         1. Term quality signal (từ candidate features - TF-IDF, BM25)
-        2. Query length management
-        3. Step-based shaping
-        4. Done bonus/penalty
+        2. Relevance signal (term xuất hiện trong relevant docs) - NEW
+        3. Query length management
+        4. Step-based shaping
+        5. Done bonus/penalty
+        
+        Cải tiến cho PPO:
+        - Reward được normalize về [-1, 1] để stable training
+        - Step discount để khuyến khích chọn terms tốt sớm
+        - Relevance signal giúp agent học terms thực sự hữu ích
+        
+        Args:
+            relevant_terms: Set các terms xuất hiện trong relevant documents
         
         Returns:
             Scalar reward trong khoảng [-1, 1]
@@ -955,47 +1045,65 @@ class OptimizedRLTrainingLoop:
         if not done:
             # === TERM SELECTION REWARD ===
             
-            # 1. Term Quality Signal (sử dụng features đã compute)
+            # 1. Relevance Signal (quan trọng nhất)
+            # Nếu term xuất hiện trong relevant docs -> higher reward
+            if selected_term and relevant_terms:
+                if selected_term.lower() in relevant_terms:
+                    reward += 0.35  # Strong signal cho relevant term
+                else:
+                    reward += 0.05  # Small reward cho expansion
+            
+            # 2. Term Quality Signal (sử dụng features đã compute)
             if candidate_features is not None:
                 tfidf_score = candidate_features.get('tfidf', 0.0)
                 bm25_score = candidate_features.get('bm25_contrib', 0.0)
-                # Weighted term quality - scale to [0, 0.4]
-                term_quality = 0.6 * tfidf_score + 0.4 * bm25_score
-                reward += 0.4 * min(term_quality, 1.0)
+                # Normalize và combine - scale to [0, 0.3]
+                # Sử dụng min để tránh outliers
+                term_quality = 0.6 * min(tfidf_score, 1.0) + 0.4 * min(bm25_score, 1.0)
+                reward += 0.3 * term_quality
             else:
                 # Fallback: small positive reward for selecting any term
-                reward += 0.1
+                reward += 0.05
             
-            # 2. Diversity bonus - thưởng terms mới
+            # 3. Diversity bonus - thưởng terms mới không có trong query gốc
             if selected_term and selected_term.lower() not in original_tokens:
                 reward += 0.1
             
-            # 3. Length penalty - phạt query quá dài
+            # 4. Length penalty - phạt query quá dài (> 4 terms added)
             if num_added > 4:
-                reward -= 0.15 * (num_added - 4)
+                reward -= 0.1 * (num_added - 4)
             
-            # 4. Step discount - khuyến khích chọn terms tốt sớm
+            # 5. Step discount - khuyến khích chọn terms tốt sớm
+            # Giảm dần reward theo step để agent học priority
             step_discount = 0.95 ** step
             reward *= step_discount
             
         else:
             # === STOP ACTION REWARD ===
             
-            # Reward dựa trên số terms đã thêm
+            # Đánh giá chất lượng query cuối cùng
             if num_added == 0:
                 # Penalty cho stopping mà không expand
-                reward = -0.5
+                reward = -0.4
             elif 1 <= num_added <= 3:
                 # Optimal range - bonus
-                reward = 0.3 + 0.1 * num_added
+                # Kiểm tra xem các terms added có relevant không
+                if relevant_terms:
+                    relevant_added = sum(1 for t in added_tokens if t.lower() in relevant_terms)
+                    if relevant_added > 0:
+                        reward = 0.4 + 0.15 * relevant_added  # Bonus cho relevant terms
+                    else:
+                        reward = 0.2  # Base reward cho expansion hợp lý
+                else:
+                    reward = 0.3 + 0.1 * num_added
             elif 4 <= num_added <= 5:
                 # Acceptable range
-                reward = 0.2
+                reward = 0.15
             else:
                 # Too many terms - penalty
-                reward = 0.1 - 0.05 * (num_added - 5)
+                reward = 0.05 - 0.05 * (num_added - 5)
         
-        # Clamp reward to [-1, 1]
+        # Clamp reward to [-1, 1] để stable PPO training
         return max(-1.0, min(1.0, reward))
     
     def compute_reward_cached(
@@ -1272,11 +1380,50 @@ class OptimizedRLTrainingLoop:
             self.metrics_history['train_reward'].append(train_metrics['avg_reward'])
             self.metrics_history['epoch_time'].append(epoch_time)
         
+        # ================================================================
+        # FINAL CHECKPOINT: Always save at end of training
+        # ================================================================
+        self.logger.info("=" * 60)
+        self.logger.info("Saving final checkpoint...")
+        
+        # Always run final validation if we have validation data
+        if self.val_dataset and best_metric == 0.0:
+            self.logger.info("Running final validation (skipped during training)...")
+            val_metrics = self.evaluate(self.val_dataset, 'val')
+            self.logger.info(
+                f"Final Validation | "
+                f"Recall@100: {val_metrics['recall@100']:.4f} | "
+                f"MRR: {val_metrics['mrr']:.4f}"
+            )
+            best_metric = val_metrics['mrr']
+        
+        # Always save final model checkpoint
+        final_checkpoint_path = self.checkpoint_dir / "final_model.pt"
+        save_checkpoint(
+            self.rl_trainer.agent_module,
+            self.rl_trainer.optimizer,
+            self.num_epochs - 1,
+            {'final_reward': self.metrics_history['train_reward'][-1] if self.metrics_history['train_reward'] else 0},
+            final_checkpoint_path
+        )
+        self.logger.info(f"✅ Saved final model to: {final_checkpoint_path}")
+        
+        # Save best model if not already saved
+        best_path = self.checkpoint_dir / "best_model.pt"
+        if not best_path.exists():
+            save_checkpoint(
+                self.rl_trainer.agent_module,
+                self.rl_trainer.optimizer,
+                self.num_epochs - 1,
+                {'mrr': best_metric, 'final_reward': self.metrics_history['train_reward'][-1] if self.metrics_history['train_reward'] else 0},
+                best_path
+            )
+            self.logger.info(f"✅ Saved best model to: {best_path}")
+        
         # Final test evaluation
         if self.test_dataset:
             self.logger.info("Running final test evaluation...")
             
-            best_path = self.checkpoint_dir / "best_model.pt"
             if best_path.exists():
                 load_checkpoint(self.rl_trainer.agent_module, best_path)
             
@@ -1299,10 +1446,51 @@ class OptimizedRLTrainingLoop:
         self.logger.info("Training Statistics:")
         self.logger.info(f"  Total epochs: {len(self.metrics_history['epoch_time'])}")
         self.logger.info(f"  Avg epoch time: {np.mean(self.metrics_history['epoch_time']):.1f}s")
-        self.logger.info(f"  Final reward: {self.metrics_history['train_reward'][-1]:.4f}")
+        self.logger.info(f"  Final reward: {self.metrics_history['train_reward'][-1] if self.metrics_history['train_reward'] else 0:.4f}")
         self.logger.info(f"  Best MRR: {best_metric:.4f}")
         self.logger.info(f"  Embedding cache hit rate: {self.embedding_cache.stats()['hit_rate']:.2%}")
         self.logger.info("=" * 60)
+        
+        # ================================================================
+        # HUGGINGFACE UPLOAD
+        # ================================================================
+        if self.hf_uploader and best_path.exists():
+            self.logger.info("=" * 60)
+            self.logger.info("📤 Uploading to HuggingFace...")
+            try:
+                # Upload best model
+                metrics_to_upload = {
+                    'mrr': best_metric,
+                    'final_reward': self.metrics_history['train_reward'][-1] if self.metrics_history['train_reward'] else 0,
+                    'epochs_trained': len(self.metrics_history['epoch_time']),
+                }
+                
+                # Add test metrics if available
+                if self.test_dataset and 'test_metrics' in dir():
+                    metrics_to_upload.update({
+                        'test_recall@100': test_metrics.get('recall@100', 0),
+                        'test_mrr': test_metrics.get('mrr', 0),
+                    })
+                
+                self.hf_uploader.upload_checkpoint(
+                    checkpoint_path=str(best_path),
+                    metrics=metrics_to_upload,
+                    config=self.config
+                )
+                self.logger.info(f"✅ Uploaded best model to HuggingFace: {self.hf_repo_id}")
+                
+                # Also upload final model if different from best
+                if final_checkpoint_path.exists() and final_checkpoint_path != best_path:
+                    self.hf_uploader.upload_checkpoint(
+                        checkpoint_path=str(final_checkpoint_path),
+                        metrics={'final_reward': self.metrics_history['train_reward'][-1] if self.metrics_history['train_reward'] else 0},
+                        config=self.config
+                    )
+                    self.logger.info(f"✅ Uploaded final model to HuggingFace")
+                    
+            except Exception as e:
+                self.logger.error(f"❌ HuggingFace upload failed: {e}")
+            self.logger.info("=" * 60)
 
 
 if __name__ == "__main__":

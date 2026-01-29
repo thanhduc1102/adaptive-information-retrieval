@@ -82,11 +82,11 @@ retrieval:
 
 # Training - GPU Optimized
 training:
-  num_epochs: 50
+  num_epochs: 1
   
   # Batching - KEY FOR GPU UTILIZATION
-  batch_size: 64               # PPO update batch size
-  collect_batch_size: 32       # Episodes to collect in parallel
+  batch_size: 128               # PPO update batch size
+  collect_batch_size: 128       # Episodes to collect in parallel
   episodes_per_update: 256     # Episodes before PPO update
   ppo_epochs: 4                # PPO epochs per update
   
@@ -114,9 +114,9 @@ training:
     recall: 0.7
     mrr: 0.3
   
-  # Checkpointing
+  # Checkpointing - IMPORTANT: save_freq <= num_epochs to ensure checkpoint
   checkpoint_dir: './checkpoints_msa_optimized'
-  save_freq: 5
+  save_freq: 1                 # Save every epoch (changed from 5)
   
   # Early stopping
   early_stopping_patience: 10
@@ -131,3 +131,10 @@ training:
   # Caching
   embedding_cache_size: 200000
   search_cache_size: 10000
+
+# HuggingFace Upload Configuration
+huggingface:
+  enabled: true               # Set to true to enable upload
+  repo_id: 'thanhduc1180/adaptive-ir-model'                # e.g., 'username/adaptive-ir-model'
+  token: null                  # HuggingFace token (or use HF_TOKEN env var)
+  private: false               # Whether repo should be private
