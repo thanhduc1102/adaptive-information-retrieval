@@ -70,5 +70,5 @@ python train.py --config ./configs/msa_config.yaml --epochs 50
 python train_quickly.py --config ./configs/msa_quick_config.yaml --batch-size 64 --epochs 50
 
 # If you just want to smoke test (D_cbow_pdw_8B) for 1k sample (you can specify num of sample in smoke config)'
-python train_smoke.py --config ./configs/msa_smoke_config.yaml
+python train_smoke_test.py --config ./configs/msa_smoke_config.yaml
 ```
