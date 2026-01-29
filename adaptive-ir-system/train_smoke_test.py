@@ -114,27 +114,28 @@ def slice_dataset(dataset, limit, logger, name="dataset"):
     if limit is None or limit <= 0:
         return dataset
 
-    original_len = len(dataset)
-    
-    # Cách 1: Nếu dataset có thuộc tính .queries (dạng list) - MSA dataset của bạn thường dùng cách này
+    # --- ƯU TIÊN 1: Xử lý LegacyDatasetAdapter (MSA) ---
+    # Class này không có __len__, nên phải check list 'queries' trực tiếp
     if hasattr(dataset, 'queries') and isinstance(dataset.queries, list):
+        original_len = len(dataset.queries) # Lấy len từ list, không gọi len(dataset)
+        
+        # Cắt list queries
         dataset.queries = dataset.queries[:limit]
-        # Nếu có qrels dict, lọc lại cho sạch (không bắt buộc nhưng tốt hơn)
-        if hasattr(dataset, 'qrels') and isinstance(dataset.qrels, dict):
-            # Lấy list ID từ queries đã cắt
-            try:
-                # Giả định query là tuple/obj có qid hoặc chính là ID
-                # Logic này tùy thuộc cấu trúc query, nhưng cắt list queries là quan trọng nhất
-                pass 
-            except:
-                pass
-        logger.warning(f"✂️ SLICED {name}: {original_len} -> {len(dataset.queries)} samples")
+        
+        logger.warning(f"✂️ SLICED {name}: {original_len} -> {len(dataset.queries)} samples (Modified .queries list)")
         return dataset
     
-    # Cách 2: Nếu là Torch Dataset chuẩn
-    else:
+    # --- ƯU TIÊN 2: Xử lý Standard PyTorch Dataset ---
+    # Các dataset này có __len__
+    try:
+        original_len = len(dataset)
         logger.warning(f"✂️ SLICED {name}: {original_len} -> {limit} samples (using Subset)")
+        from torch.utils.data import Subset
         return Subset(dataset, range(min(original_len, limit)))
+    except TypeError:
+        # Trường hợp xấu nhất: Không đo được độ dài, không cắt được
+        logger.warning(f"⚠️ WARNING: Cannot slice {name}. Object has no len() and no 'queries' list. Using full dataset.")
+        return dataset
 
 def main(args):
     """Main training function."""
