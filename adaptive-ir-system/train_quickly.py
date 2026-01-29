@@ -1,12 +1,5 @@
 """
 Optimized Training Script for Multi-GPU
-
-Train the Adaptive IR system with GPU optimizations:
-- Multi-GPU support (DataParallel)
-- Mixed precision training (FP16)
-- Batched episode collection
-- Pre-computed embeddings cache
-- Efficient memory management
 """
 
 import logging
@@ -18,6 +11,7 @@ import torch
 import torch.multiprocessing as mp
 from pathlib import Path
 import time
+from torch.utils.data import Subset
 
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent))
@@ -26,6 +20,70 @@ from src.utils import setup_logging, ConfigManager, set_seed
 from src.utils.data_loader import DatasetFactory
 from src.pipeline import AdaptiveIRPipeline
 from src.training.train_rl_quickly import OptimizedRLTrainingLoop
+
+def limit_dataset_size(dataset, limit, logger, name="Train"):
+    """
+    Giới hạn số lượng sample của dataset.
+    Sử dụng Smart Proxy để đảm bảo tương thích với mọi loại dataset (List/Dict/HDF5).
+    """
+    if limit is None or limit <= 0:
+        return dataset
+
+    original_len = "Unknown"
+    if hasattr(dataset, 'queries') and isinstance(dataset.queries, (list, dict)):
+        original_len = len(dataset.queries)
+    elif hasattr(dataset, 'num_queries'):
+        original_len = dataset.num_queries
+
+    # Patch __len__ nếu dataset gốc thiếu
+    if not hasattr(dataset, '__len__'):
+        dataset.__len__ = lambda: 271345 # Fake len to satisfy Subset logic
+
+    try:
+        # Định nghĩa Class Proxy thông minh ngay tại đây
+        class SmartSlicedDataset(Subset):
+            def __init__(self, dataset, indices, limit):
+                super().__init__(dataset, indices)
+                self.limit = limit
+
+            def __getattr__(self, name):
+                # Tự động chuyển tiếp mọi hàm không có xuống dataset gốc
+                return getattr(self.dataset, name)
+
+            def load_queries(self):
+                # Intercept và cắt queries
+                raw = self.dataset.load_queries()
+                if isinstance(raw, list): return raw[:self.limit]
+                if isinstance(raw, dict): 
+                    # Lấy N keys đầu tiên
+                    keys = list(raw.keys())[:self.limit]
+                    return {k: raw[k] for k in keys}
+                return raw
+
+            def load_qrels(self):
+                # Intercept và cắt qrels
+                raw = self.dataset.load_qrels()
+                if isinstance(raw, dict):
+                    try:
+                        # Cố gắng đồng bộ với queries
+                        queries = self.load_queries()
+                        if isinstance(queries, dict):
+                            keys = set(queries.keys())
+                            return {k: raw[k] for k in keys if k in raw}
+                    except:
+                        pass
+                    return {k: raw[k] for k in list(raw.keys())[:self.limit]}
+                return raw
+
+        # Tạo dataset đã cắt
+        sliced_dataset = SmartSlicedDataset(dataset, range(limit), limit)
+        logger.warning(f"✂️  LIMIT APPLIED to {name}: {original_len} -> {limit} samples")
+        return sliced_dataset
+
+    except Exception as e:
+        logger.error(f"❌ Failed to slice {name}: {e}")
+        return dataset
+# ==============================================================================
 
 
 def load_config(config_path: str) -> dict:
@@ -52,8 +110,6 @@ def print_gpu_info():
         props = torch.cuda.get_device_properties(i)
         print(f"\nGPU {i}: {props.name}")
         print(f"  Memory: {props.total_memory / 1e9:.2f} GB")
-        print(f"  Compute Capability: {props.major}.{props.minor}")
-        print(f"  Multi-processor count: {props.multi_processor_count}")
         
         # Current memory usage
         allocated = torch.cuda.memory_allocated(i) / 1e9
@@ -81,12 +137,10 @@ def check_and_setup_java():
         return
 
     import glob
-    
     candidates = []
     candidates.extend(sorted(glob.glob('/usr/lib/jvm/java-21-openjdk-*'), reverse=True))
     candidates.extend(sorted(glob.glob('/usr/lib/jvm/java-17-openjdk-*'), reverse=True))
     candidates.extend(sorted(glob.glob('/usr/lib/jvm/java-11-openjdk-*'), reverse=True))
-    candidates.extend(sorted(glob.glob('/usr/lib/jvm/java-*-openjdk-*'), reverse=True))
     
     final_candidates = []
     seen = set()
@@ -105,7 +159,7 @@ def setup_search_engine(config: dict, dataset_adapter=None):
     """Initialize search engine."""
     dataset_type = config['data'].get('dataset_type', 'msmarco')
     
-    if dataset_type in ['msa_LEGACY_MODE_DISABLED' 'trec-car', 'jeopardy', 'legacy', 'hdf5']:
+    if dataset_type in ['msa_LEGACY_MODE_DISABLED', 'trec-car', 'jeopardy', 'legacy', 'hdf5']:
         if dataset_adapter is None:
             raise ValueError("Legacy datasets require dataset_adapter")
         
@@ -116,11 +170,9 @@ def setup_search_engine(config: dict, dataset_adapter=None):
             k1=config['retrieval'].get('bm25_k1', 0.9),
             b=config['retrieval'].get('bm25_b', 0.4)
         )
-        
         return searcher
     else:
         from pyserini.search.lucene import LuceneSearcher
-        
         index_path = config['data']['index_path']
         if not Path(index_path).exists():
             raise FileNotFoundError(f"Index not found at {index_path}")
@@ -130,7 +182,6 @@ def setup_search_engine(config: dict, dataset_adapter=None):
             config['retrieval'].get('bm25_k1', 0.9),
             config['retrieval'].get('bm25_b', 0.4)
         )
-        
         return searcher
 
 
@@ -152,16 +203,15 @@ def main(args):
     config_manager = ConfigManager(config)
     
     # Override with command line args
-    if args.device:
-        config_manager.set('system.device', args.device)
-    if args.seed:
-        config_manager.set('system.seed', args.seed)
-    if args.epochs:
-        config_manager.set('training.num_epochs', args.epochs)
-    if args.batch_size:
-        config_manager.set('training.batch_size', args.batch_size)
-    if args.no_amp:
-        config_manager.set('training.use_amp', False)
+    if args.device: config_manager.set('system.device', args.device)
+    if args.seed: config_manager.set('system.seed', args.seed)
+    if args.epochs: config_manager.set('training.num_epochs', args.epochs)
+    if args.batch_size: config_manager.set('training.batch_size', args.batch_size)
+    if args.no_amp: config_manager.set('training.use_amp', False)
+    
+    # Override Max Samples if provided via CLI
+    if args.max_samples:
+        config_manager.set('data.max_train_samples', args.max_samples)
     
     # Setup logging
     log_dir = Path(config['training'].get('log_dir', './logs_msa_optimized'))
@@ -197,11 +247,17 @@ def main(args):
     train_dataset = dataset_factory.create_dataset('train')
     val_dataset = dataset_factory.create_dataset('dev')
     test_dataset = dataset_factory.create_dataset('test') if args.test else None
+
+    # --- APPLY LIMIT IF CONFIGURED (ONLY FOR TRAIN) ---
+    max_train_samples = config['data'].get('max_train_samples', None)
+    if max_train_samples:
+        train_dataset = limit_dataset_size(train_dataset, max_train_samples, logger, "Train Dataset")
+    # --------------------------------------------------
     
     train_queries = train_dataset.load_queries()
     val_queries = val_dataset.load_queries()
     
-    logger.info(f"Train queries: {len(train_queries)}")
+    logger.info(f"Train queries (Active): {len(train_queries)}")
     logger.info(f"Val queries: {len(val_queries)}")
     if test_dataset:
         logger.info(f"Test queries: {len(test_dataset.load_queries())}")
@@ -211,7 +267,7 @@ def main(args):
     logger.info("\n🔍 Initializing search engine...")
     
     dataset_type = config['data'].get('dataset_type', 'msmarco')
-    if dataset_type in ['msa_LEGACY_MODE_DISABLED' 'trec-car', 'jeopardy', 'legacy', 'hdf5']:
+    if dataset_type in ['msa_LEGACY_MODE_DISABLED', 'trec-car', 'jeopardy', 'legacy', 'hdf5']:
         search_engine = setup_search_engine(config, dataset_adapter=train_dataset)
         logger.info("Search engine: SimpleBM25 (legacy dataset)")
     else:
@@ -246,7 +302,6 @@ def main(args):
         embedding_model=embedding_model
     )
     
-    # Load checkpoint if specified
     if args.checkpoint:
         logger.info(f"Loading checkpoint: {args.checkpoint}")
         pipeline.load_rl_checkpoint(args.checkpoint)
@@ -269,8 +324,6 @@ def main(args):
     logger.info(f"  Batch size: {config['training']['batch_size']}")
     logger.info(f"  Collect batch size: {config['training'].get('collect_batch_size', 16)}")
     logger.info(f"  Episodes per update: {config['training']['episodes_per_update']}")
-    logger.info(f"  PPO epochs: {config['training'].get('ppo_epochs', 4)}")
-    logger.info(f"  Buffer size: {config['training'].get('buffer_size', 10000)}")
     logger.info(f"  Learning rate: {config['training']['learning_rate']}")
     logger.info("=" * 60)
     
@@ -295,62 +348,22 @@ def main(args):
 
 
 if __name__ == "__main__":
-    # Enable TF32 for faster matrix multiplication on Ampere+ GPUs
     torch.backends.cuda.matmul.allow_tf32 = True
     torch.backends.cudnn.allow_tf32 = True
-    
-    # Enable cudnn benchmark for faster convolutions
     torch.backends.cudnn.benchmark = True
     
     parser = argparse.ArgumentParser(description='Optimized GPU Training for Adaptive IR')
     
-    parser.add_argument(
-        '--config',
-        type=str,
-        default='./configs/msa_optimized_gpu.yaml',
-        help='Path to config file'
-    )
-    parser.add_argument(
-        '--checkpoint',
-        type=str,
-        default=None,
-        help='Path to checkpoint to resume from'
-    )
-    parser.add_argument(
-        '--device',
-        type=str,
-        default=None,
-        help='Device (cuda/cpu)'
-    )
-    parser.add_argument(
-        '--seed',
-        type=int,
-        default=None,
-        help='Random seed'
-    )
-    parser.add_argument(
-        '--epochs',
-        type=int,
-        default=None,
-        help='Number of epochs'
-    )
-    parser.add_argument(
-        '--batch-size',
-        type=int,
-        default=None,
-        dest='batch_size',
-        help='Batch size'
-    )
-    parser.add_argument(
-        '--no-amp',
-        action='store_true',
-        help='Disable mixed precision training'
-    )
-    parser.add_argument(
-        '--test',
-        action='store_true',
-        help='Run test evaluation after training'
-    )
+    parser.add_argument('--config', type=str, default='./configs/msa_optimized_gpu.yaml', help='Path to config file')
+    parser.add_argument('--checkpoint', type=str, default=None, help='Path to checkpoint to resume from')
+    parser.add_argument('--device', type=str, default=None, help='Device (cuda/cpu)')
+    parser.add_argument('--seed', type=int, default=None, help='Random seed')
+    parser.add_argument('--epochs', type=int, default=None, help='Number of epochs')
+    parser.add_argument('--batch-size', type=int, default=None, dest='batch_size', help='Batch size')
+    parser.add_argument('--no-amp', action='store_true', help='Disable mixed precision training')
+    parser.add_argument('--test', action='store_true', help='Run test evaluation after training')
+    
+    parser.add_argument('--max-samples', type=int, default=None, help='Limit training samples (e.g. 10000) for testing')
     
     args = parser.parse_args()
     

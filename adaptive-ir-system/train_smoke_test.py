@@ -110,31 +110,66 @@ def setup_search_engine(config: dict, dataset_adapter=None):
         return searcher
 
 def slice_dataset(dataset, limit, logger, name="dataset"):
-    """Helper function to slice different types of datasets."""
+    """
+    ULTIMATE FIX: Smart Proxy Wrapper.
+    Tạo một class vỏ bọc kế thừa từ Subset nhưng tự động 
+    chuyển tiếp (delegate) mọi hàm thiếu xuống dataset gốc.
+    """
     if limit is None or limit <= 0:
         return dataset
 
-    # --- ƯU TIÊN 1: Xử lý LegacyDatasetAdapter (MSA) ---
-    # Class này không có __len__, nên phải check list 'queries' trực tiếp
-    if hasattr(dataset, 'queries') and isinstance(dataset.queries, list):
-        original_len = len(dataset.queries) # Lấy len từ list, không gọi len(dataset)
-        
-        # Cắt list queries
-        dataset.queries = dataset.queries[:limit]
-        
-        logger.warning(f"✂️ SLICED {name}: {original_len} -> {len(dataset.queries)} samples (Modified .queries list)")
-        return dataset
-    
-    # --- ƯU TIÊN 2: Xử lý Standard PyTorch Dataset ---
-    # Các dataset này có __len__
+    # 1. Patch __len__ cho dataset gốc nếu thiếu (để Subset không lỗi khởi tạo)
+    if not hasattr(dataset, '__len__'):
+        dataset.__len__ = lambda: 271345 # Fake len
+
     try:
-        original_len = len(dataset)
-        logger.warning(f"✂️ SLICED {name}: {original_len} -> {limit} samples (using Subset)")
         from torch.utils.data import Subset
-        return Subset(dataset, range(min(original_len, limit)))
-    except TypeError:
-        # Trường hợp xấu nhất: Không đo được độ dài, không cắt được
-        logger.warning(f"⚠️ WARNING: Cannot slice {name}. Object has no len() and no 'queries' list. Using full dataset.")
+        
+        # Định nghĩa class Proxy ngay tại đây
+        class SmartSlicedDataset(Subset):
+            def __init__(self, dataset, indices, limit):
+                super().__init__(dataset, indices)
+                self.limit = limit
+
+            def __getattr__(self, name):
+                """
+                Đây là chìa khóa: Nếu SmartSlicedDataset không có hàm 'name',
+                nó sẽ tự động tìm trong self.dataset (dataset gốc).
+                """
+                return getattr(self.dataset, name)
+
+            def load_queries(self):
+                """Intercept và cắt queries"""
+                raw = self.dataset.load_queries()
+                if isinstance(raw, list): return raw[:self.limit]
+                if isinstance(raw, dict): return {k: raw[k] for k in list(raw.keys())[:self.limit]}
+                return raw
+
+            def load_qrels(self):
+                """Intercept và cắt qrels"""
+                raw = self.dataset.load_qrels()
+                # Cố gắng cắt qrels tương ứng với queries đã cắt (nếu có thể)
+                if isinstance(raw, dict):
+                    # Lấy keys từ queries đã cắt để đồng bộ
+                    try:
+                        queries = self.load_queries()
+                        if isinstance(queries, dict):
+                            keys = set(queries.keys())
+                            return {k: raw[k] for k in keys if k in raw}
+                    except:
+                        pass
+                    # Fallback: Cắt đại N keys đầu tiên
+                    return {k: raw[k] for k in list(raw.keys())[:self.limit]}
+                return raw
+
+        # Tạo object từ class thông minh này
+        sliced_dataset = SmartSlicedDataset(dataset, range(limit), limit)
+        
+        logger.warning(f"✂️ SLICED {name} (Smart Proxy): Limit to {limit} samples")
+        return sliced_dataset
+        
+    except Exception as e:
+        logger.error(f"❌ FAILED TO SLICE {name}: {e}")
         return dataset
 
 def main(args):
