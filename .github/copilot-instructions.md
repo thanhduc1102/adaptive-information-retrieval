@@ -2,149 +2,167 @@
 
 ## Project Overview
 
-This is an **Adaptive Retrieve-Fuse-Re-rank Search Engine** combining Deep RL query reformulation with modern IR techniques. The system solves the **bounded recall problem** in cascade ranking—documents not found in stage 1 retrieval cannot be recovered by later re-ranking.
+**Adaptive Retrieve-Fuse-Re-rank Search Engine** using Deep RL query reformulation. Solves the **bounded recall problem**—documents not retrieved in stage 1 cannot be recovered by re-ranking.
 
-**Two implementations coexist:**
-1. **`dl4ir-query-reformulator/`**: Legacy Theano/Python 2.7 reference (read-only)
-2. **`adaptive-ir-system/`**: Modern PyTorch implementation (active development)
+**Two codebases:**
+- **`adaptive-ir-system/`**: Active PyTorch implementation (focus here)
+- **`dl4ir-query-reformulator/`**: Legacy Theano reference (read-only)
 
 ## Architecture: 4-Stage Pipeline
 
 ```
-Query → [Stage 0] Candidate Mining → [Stage 1] RL Reformulation
-      → [Stage 2] Multi-Query Retrieval + RRF → [Stage 3] BERT Re-rank → Results
+Query → [Stage 0] CandidateTermMiner → [Stage 1] QueryReformulatorAgent (RL)
+      → [Stage 2] BM25 + RRF Fusion → [Stage 3] BERT Re-rank → Results
 ```
 
-### Key Source Files
-| Component | File | Purpose |
-|-----------|------|---------|
-| Pipeline orchestrator | `src/pipeline/adaptive_pipeline.py` | End-to-end processing |
-| RL Agent | `src/rl_agent/agent.py` | Actor-Critic Transformer for term selection |
-| Training loop | `src/training/train_rl_optimized.py` | GPU-optimized PPO with batched episodes |
-| RRF Fusion | `src/fusion/rrf.py` | Merge multi-query results |
-| Metrics | `src/evaluation/metrics.py` | Recall, MRR, nDCG, MAP computation |
-| Data loading | `src/utils/data_loader.py` | MS MARCO + Legacy HDF5 datasets |
+**Key insight**: Agent learns to select candidate terms that expand query, improving recall before re-ranking.
 
-## Configuration-Driven Development
+### Source File Map
+| Component | File | Key Classes/Functions |
+|-----------|------|----------------------|
+| Pipeline | `src/pipeline/adaptive_pipeline.py` | `AdaptiveIRPipeline` - orchestrates all stages |
+| RL Agent | `src/rl_agent/agent.py` | `QueryReformulatorAgent(nn.Module)` - Actor-Critic Transformer |
+| Training | `src/training/train_rl_quickly.py` | `OptimizedRLTrainingLoop`, `EmbeddingCache`, `EpisodeData` |
+| Candidate Mining | `src/candidate_mining/term_miner.py` | `CandidateTermMiner` - TF-IDF, BM25 contrib |
+| RRF Fusion | `src/fusion/rrf.py` | `RecipRankFusion` - merge multi-query results |
+| BERT Re-ranker | `src/reranker/bert_reranker.py` | `BERTReranker` - cross-encoder |
+| Data | `src/utils/legacy_loader.py` | `LegacyDatasetAdapter`, `LegacyDatasetHDF5` |
+| Search | `src/utils/simple_searcher.py` | `SimpleBM25Searcher` (in-memory, no Lucene) |
+| Metrics | `src/evaluation/metrics.py` | `IRMetrics.recall_at_k()`, `.reciprocal_rank()`, `.ndcg_at_k()` |
 
-All training parameters live in YAML configs (`configs/`). Key patterns:
+## Critical Workflows
 
-```yaml
-# configs/msa_optimized_gpu.yaml - Reference GPU config
-data:
-  dataset_type: 'msa'           # Options: msa, trec-car, jeopardy, msmarco
-  data_dir: '../Query Reformulator'
-
-embeddings:
-  type: 'legacy'                # 'legacy' for Word2Vec, 'sentence-transformers' otherwise
-  path: '../Query Reformulator/D_cbow_pdw_8B.pkl'
-
-training:
-  collect_batch_size: 32        # Episodes collected in parallel
-  episodes_per_update: 256      # Episodes before PPO update
-  use_amp: true                 # Mixed precision (FP16)
-```
-
-**Override via CLI**: `python train_optimized.py --epochs 20 --batch-size 64 --no-amp`
-
-## Developer Workflows
-
-### Quick Test (Verify Setup)
+### 1. Always Verify Setup First
 ```bash
 cd adaptive-ir-system
-python train_quick_test.py                    # Runs 1 epoch, small batch
-python scripts/test_legacy_data.py            # Verify HDF5 data loading
+python poc_test.py                     # Tests all components
 ```
 
-### Full Training
+### 2. Training Commands
 ```bash
-python train_optimized.py --config configs/msa_optimized_gpu.yaml --test
+# Recommended: Legacy Word2Vec (~4.5h/epoch on 2x T4)
+python train_quickly.py --config ./configs/msa_quick_config.yaml --epochs 10
 ```
-- Logs to `logs_msa/train.log`
-- Checkpoints saved automatically
 
-### Inference
+### 3. Demo Full Pipeline
 ```bash
-python inference.py --checkpoint checkpoints/best.pt --query "machine learning basics"
+# Demo với sample queries
+python demo_full_pipeline.py --sample 3 --no-bert
+
+# So sánh với BM25 baseline
+python demo_full_pipeline.py --query "your query" --compare
+
+# Interactive mode
+python demo_full_pipeline.py
 ```
 
-## Code Patterns
+### 4. Full Evaluation
+```bash
+# Compare all methods: baseline, RM3, RL+RRF, Full pipeline
+python evaluate_full.py --split valid --num-queries 500 --no-bert
 
-### Dataset Adapters
-Use `DatasetFactory` to handle both modern and legacy formats:
+# With BERT re-ranking
+python evaluate_full.py --split valid --num-queries 200
+```
+
+### 5. Fast Evaluation
+```bash
+python eval_checkpoint_optimized.py --checkpoint checkpoints_msa_optimized/best_model.pt --split valid
+```
+
+## Code Patterns (Follow These)
+
+### Script Imports - ALWAYS add sys.path first
 ```python
-# src/utils/data_loader.py
-factory = DatasetFactory(config['data'])
-dataset = factory.create_dataset('train')  # Returns appropriate adapter
-queries = dataset.load_queries()           # Unified interface
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent))  # Required for src.* imports
 ```
 
-### Search Engine Abstraction
-Two search backends with same interface:
-- **`SimpleBM25Searcher`**: In-memory BM25 for HDF5 datasets (no index required)
-- **`LuceneSearcher`**: Pyserini for MS MARCO (requires pre-built index)
-
-Selection is automatic based on `dataset_type` in config.
-
-### RL Agent Interface
+### Java Setup - Copy this pattern for new scripts
 ```python
-# Forward pass returns: (action_logits, value_estimate, stop_logit)
-logits, value, stop = agent(query_emb, current_emb, candidate_embs, features)
+import os
+os.environ['JAVA_HOME'] = '/usr/lib/jvm/java-21-openjdk-amd64'  # Before Pyserini imports
 ```
 
-### Embedding Cache Pattern
-`EmbeddingCache` in training loop pre-computes embeddings to avoid redundant computation:
+### Dataset Loading
 ```python
-cache = EmbeddingCache(embedding_model, device='cuda')
-emb = cache.get("query text")        # Single text
-embs = cache.get_batch(["t1", "t2"]) # Batched
+from src.utils.legacy_loader import LegacyDatasetAdapter
+adapter = LegacyDatasetAdapter(
+    dataset_path='../Query Reformulator/msa_dataset.hdf5',
+    corpus_path='../Query Reformulator/msa_corpus.hdf5',
+    split='train'  # or 'valid', 'test'
+)
+queries = adapter.load_queries()   # Dict[str, str]
+qrels = adapter.load_qrels()       # Dict[str, Dict[str, int]]
 ```
 
-## Important Conventions
+### Search Engine
+```python
+from src.utils.simple_searcher import SimpleBM25Searcher
+searcher = SimpleBM25Searcher(adapter, k1=0.9, b=0.4)
+results = searcher.search("query text", k=100)  # List[Dict] with 'doc_id', 'score'
+```
 
-1. **Device handling**: Always respect `config['system']['device']`. Check CUDA availability:
-   ```python
-   device = 'cuda' if torch.cuda.is_available() else 'cpu'
-   ```
+### Candidate Mining
+```python
+from src.candidate_mining import CandidateTermMiner
+miner = CandidateTermMiner({'max_candidates': 50, 'methods': ['tfidf', 'bm25_contrib']})
+candidates = miner.extract_candidates(query, documents, doc_scores)
+```
 
-2. **Java for Pyserini**: Auto-configured in `train_optimized.py::check_and_setup_java()`. If adding new entry points, include similar logic.
+### RRF Fusion
+```python
+from src.fusion import RecipRankFusion
+rrf = RecipRankFusion(k=60)
+fused = rrf.fuse([list1, list2, list3])  # List[Tuple[doc_id, score]]
+```
 
-3. **Legacy vs Modern embeddings**: Set `embeddings.type: 'legacy'` for 500-dim Word2Vec, otherwise sentence-transformers (384-dim).
+### Metrics
+```python
+from src.evaluation.metrics import IRMetrics
+recall = IRMetrics.recall_at_k(retrieved_ids, relevant_set, k=100)
+mrr = IRMetrics.reciprocal_rank(retrieved_ids[:10], relevant_set)
+ndcg = IRMetrics.ndcg_at_k(retrieved_ids, relevant_dict, k=10)  # dict for grades
+```
 
-4. **Metrics at K**: Always specify cutoff: `recall_at_k(retrieved, relevant, k=100)`
+## Configuration (`configs/msa_quick_config.yaml`)
 
-5. **Logging**: Use `setup_logging()` from utils; logs include emoji prefixes for visual scanning.
+**Critical settings:**
+```yaml
+training:
+  collect_batch_size: 128    # Reduce if OOM
+  use_amp: true              # FP16 - always enable
+embeddings:
+  type: 'legacy'             # 500-dim Word2Vec
+rl_agent:
+  num_query_variants: 4      # Number of reformulated queries
+  max_steps_per_episode: 5   # Max terms to add
+```
 
-## Data Requirements
+## Data Files
 
-| Dataset | Files Needed | Size |
-|---------|--------------|------|
-| MS Academic | `msa_dataset.hdf5`, `msa_corpus.hdf5`, `D_cbow_pdw_8B.pkl` | ~1.7GB |
-| TREC-CAR | `trec_car_dataset.hdf5` + embeddings | Similar |
-| MS MARCO | Download via `scripts/download_msmarco.py`, build index | ~3GB+ |
+HDF5 datasets in `../Query Reformulator/`:
+- `msa_dataset.hdf5` - queries + qrels
+- `msa_corpus.hdf5` - document texts
+- `D_cbow_pdw_8B.pkl` - Word2Vec embeddings
 
-## Common Issues
+## Troubleshooting
 
-| Problem | Solution |
-|---------|----------|
-| CUDA OOM | Reduce `collect_batch_size`, enable `use_amp: true` |
-| Java not found | Set `JAVA_HOME` or install openjdk-11+ |
-| HDF5 key errors | Check `scripts/check_hdf5_structure.py` for expected keys |
-| Slow training | Use `train_optimized.py` (batched), not `train.py` |
-| Agent outputs zeros | Normal early in training; check after 50+ episodes |
+| Issue | Fix |
+|-------|-----|
+| `CUDA OOM` | Reduce `collect_batch_size`, enable `use_amp: true` |
+| `JAVA_HOME not set` | `os.environ['JAVA_HOME'] = '/usr/lib/jvm/java-21-openjdk-amd64'` |
+| `ModuleNotFoundError: src.*` | Add `sys.path.insert(0, ...)` at script top |
+| Agent outputs zeros | Normal early training; wait 50+ episodes |
 
-## Documentation
+## Key Scripts
 
-- **Vietnamese docs**: `docs/TONG_QUAN_HE_THONG.md` (architecture), `QUICK_START_MSA.md`
-- **Diagrams**: `MERMAID_DIAGRAMS.md` for visual architecture
-- **GPU optimization**: `docs/GPU_OPTIMIZATION_ANALYSIS.md`
-
----
-
-## Legacy Reference (`dl4ir-query-reformulator/`)
-
-The original Theano implementation is preserved for reference:
-- **Python 2.7 + Theano 0.9** (not 1.0—causes NullTypeGradError)
-- Training: `THEANO_FLAGS='floatX=float32,device=gpu0' python run.py`
-- Config in `parameters.py`, not YAML
-- Uses PyLucene (requires `lucene.initVM()` before imports)
+| Script | Purpose |
+|--------|---------|
+| `train_quickly.py` | Main training script |
+| `demo_full_pipeline.py` | Full 4-stage pipeline demo |
+| `evaluate_full.py` | Compare all methods |
+| `eval_checkpoint_optimized.py` | Fast BM25 evaluation |
+| `inference.py` | Production inference |
+| `poc_test.py` | Setup verification |

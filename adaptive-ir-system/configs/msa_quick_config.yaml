@@ -88,7 +88,7 @@ training:
   batch_size: 128               # PPO update batch size
   collect_batch_size: 128       # Episodes to collect in parallel
   episodes_per_update: 256     # Episodes before PPO update
-  ppo_epochs: 1             # PPO epochs per update
+  ppo_epochs: 3             # PPO epochs per update
   
   # Learning rate
   learning_rate: 0.0003

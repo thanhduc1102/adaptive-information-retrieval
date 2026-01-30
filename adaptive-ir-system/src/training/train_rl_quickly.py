@@ -1304,8 +1304,8 @@ class OptimizedRLTrainingLoop:
                     continue
                 
                 # Simple BM25 retrieval without reformulation
-                doc_ids_scores = self.pipeline.retrieve(query, top_k=100)
-                doc_ids = [doc_id for doc_id, _ in doc_ids_scores]
+                # retrieve() returns (doc_ids, scores) tuple
+                doc_ids, scores = self.pipeline.retrieve(query, top_k=100)
                 
                 relevant_set = set(qrel.keys())
                 evaluator.add_query_result(

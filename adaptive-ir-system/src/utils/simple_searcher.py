@@ -47,21 +47,19 @@ class SimpleBM25Searcher:
         # Otherwise validation/test queries won't find their relevant documents
         unique_doc_ids = set()
         
-        # Load qrels from all available splits
-        current_split = self.adapter.split
+        # Load qrels from all available splits using dataset directly
+        # (LegacyDatasetAdapter.split switching doesn't work because qrels_dict is cached)
+        from src.utils.legacy_loader import LegacyDatasetHDF5
+        dataset = self.adapter.dataset
+        
         for split in ['train', 'valid', 'test']:
             try:
-                # Temporarily switch to this split
-                self.adapter.split = split
-                qrels = self.adapter.load_qrels()
-                for qrel in qrels.values():
-                    unique_doc_ids.update(qrel.keys())
-                self.logger.info(f"Collected {len(unique_doc_ids)} unique docs from {split} split")
+                _, qrels_dict = dataset.get_split_data(split)
+                for doc_ids in qrels_dict.values():
+                    unique_doc_ids.update(str(d) for d in doc_ids)
+                self.logger.info(f"Collected docs from {split} split, total unique: {len(unique_doc_ids)}")
             except Exception as e:
                 self.logger.warning(f"Could not load {split} qrels: {e}")
-        
-        # Restore original split
-        self.adapter.split = current_split
         
         self.logger.info(f"Indexing {len(unique_doc_ids)} relevant documents from all splits...")
         

@@ -347,7 +347,7 @@ class LegacyDatasetAdapter:
         Get single document.
         
         Args:
-            doc_id: Document ID (string)
+            doc_id: Document ID (can be string index or title)
             
         Returns:
             Document text or placeholder if corpus not available
@@ -357,18 +357,27 @@ class LegacyDatasetAdapter:
             return f"Document ID: {doc_id} (corpus not loaded)"
         
         try:
-            # doc_id might be string or int
+            # doc_id might be numeric string or title string
             if isinstance(doc_id, str):
-                # Try to convert to int if it's numeric
+                # First try to convert to int if it's numeric
                 try:
                     doc_idx = int(doc_id)
+                    return self.corpus.get_document(doc_idx)
                 except ValueError:
-                    # Non-numeric doc_id, try as-is
-                    return f"Document: {doc_id}"
+                    # Non-numeric doc_id - likely a title
+                    # Try to find in title->index mapping
+                    if not hasattr(self, '_title_to_idx'):
+                        self._title_to_idx = self.corpus.get_titles_pos()
+                    
+                    if doc_id in self._title_to_idx:
+                        doc_idx = self._title_to_idx[doc_id]
+                        return self.corpus.get_document(doc_idx)
+                    else:
+                        # Return the title as document text (for BM25 matching)
+                        return f"{doc_id}"
             else:
-                doc_idx = doc_id
-            
-            return self.corpus.get_document(doc_idx)
+                doc_idx = int(doc_id)
+                return self.corpus.get_document(doc_idx)
         except Exception as e:
             return f"Document ID: {doc_id} (error: {e})"
     
