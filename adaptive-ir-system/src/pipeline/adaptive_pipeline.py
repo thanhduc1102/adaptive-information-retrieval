@@ -105,8 +105,22 @@ class AdaptiveIRPipeline:
         
         results = self.search_engine.search(query, top_k)
         
-        doc_ids = [r['doc_id'] for r in results]
-        scores = [r['score'] for r in results]
+        # --- PATCHED FOR PYSERINI ---
+        if results and hasattr(results[0], 'docid'):
+            # Pyserini returns objects with attributes
+            doc_ids = [r.docid for r in results]
+            scores = [r.score for r in results]
+        else:
+            # Legacy returns dictionaries
+            # --- PATCHED FOR PYSERINI ---
+            if results and hasattr(results[0], 'docid'):
+                # Pyserini returns objects with attributes
+                doc_ids = [r.docid for r in results]
+                scores = [r.score for r in results]
+            else:
+                # Legacy returns dictionaries
+                doc_ids = [r['doc_id'] for r in results]
+                scores = [r['score'] for r in results]
         
         return doc_ids, scores
     
@@ -134,7 +148,37 @@ class AdaptiveIRPipeline:
         # Get document texts
         documents = []
         for doc_id in doc_ids:
-            doc_text = self.search_engine.get_document(doc_id)
+            # --- PATCHED FOR PYSERINI ---
+            if hasattr(self.search_engine, 'doc'):
+                # Pyserini Logic
+                doc_obj = self.search_engine.doc(doc_id)
+                if doc_obj:
+                    try:
+                        import json
+                        # Pyserini thường trả về JSON string, ta cần lấy trường 'contents'
+                        doc_text = json.loads(doc_obj.raw()).get('contents', doc_obj.raw())
+                    except:
+                        doc_text = doc_obj.raw()
+                else:
+                    doc_text = ''
+            else:
+                # Legacy Logic
+                # --- PATCHED FOR PYSERINI ---
+                if hasattr(self.search_engine, 'doc'):
+                    # Pyserini Logic
+                    doc_obj = self.search_engine.doc(doc_id)
+                    if doc_obj:
+                        try:
+                            import json
+                            # Pyserini thường trả về JSON string, ta cần lấy trường 'contents'
+                            doc_text = json.loads(doc_obj.raw()).get('contents', doc_obj.raw())
+                        except:
+                            doc_text = doc_obj.raw()
+                    else:
+                        doc_text = ''
+                else:
+                    # Legacy Logic
+                    doc_text = self.search_engine.get_document(doc_id)
             if doc_text:
                 documents.append(doc_text)
         
@@ -292,7 +336,37 @@ class AdaptiveIRPipeline:
         valid_doc_ids = []
         
         for doc_id in doc_ids:
-            doc_text = self.search_engine.get_document(doc_id)
+            # --- PATCHED FOR PYSERINI ---
+            if hasattr(self.search_engine, 'doc'):
+                # Pyserini Logic
+                doc_obj = self.search_engine.doc(doc_id)
+                if doc_obj:
+                    try:
+                        import json
+                        # Pyserini thường trả về JSON string, ta cần lấy trường 'contents'
+                        doc_text = json.loads(doc_obj.raw()).get('contents', doc_obj.raw())
+                    except:
+                        doc_text = doc_obj.raw()
+                else:
+                    doc_text = ''
+            else:
+                # Legacy Logic
+                # --- PATCHED FOR PYSERINI ---
+                if hasattr(self.search_engine, 'doc'):
+                    # Pyserini Logic
+                    doc_obj = self.search_engine.doc(doc_id)
+                    if doc_obj:
+                        try:
+                            import json
+                            # Pyserini thường trả về JSON string, ta cần lấy trường 'contents'
+                            doc_text = json.loads(doc_obj.raw()).get('contents', doc_obj.raw())
+                        except:
+                            doc_text = doc_obj.raw()
+                    else:
+                        doc_text = ''
+                else:
+                    # Legacy Logic
+                    doc_text = self.search_engine.get_document(doc_id)
             if doc_text:
                 documents.append(doc_text)
                 valid_doc_ids.append(doc_id)
@@ -366,7 +440,6 @@ class AdaptiveIRPipeline:
         result['results'] = reranked_results[:top_k]
         
         return result
-    
     def _embed_text(self, text: str) -> torch.Tensor:
         """
         Embed text using embedding model.
@@ -378,13 +451,14 @@ class AdaptiveIRPipeline:
             Embedding tensor [embedding_dim]
         """
         if self.embedding_model is None:
-            # Fallback: random embedding (for testing)
             embedding_dim = self.config.get('rl_agent', {}).get('embedding_dim', 512)
             return torch.randn(embedding_dim)
         
-        # Use actual embedding model
-        return self.embedding_model.encode(text, convert_to_tensor=True)
-    
+        try:
+            return self.embedding_model.encode(text, convert_to_tensor=True, show_progress_bar=False)
+        except TypeError:
+            return self.embedding_model.encode(text, convert_to_tensor=True)
+       
     def load_rl_checkpoint(self, checkpoint_path: str):
         """Load RL agent from checkpoint."""
         if self.rl_agent:

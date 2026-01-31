@@ -1,49 +1,66 @@
-# Configuration for MS Academic Dataset (HAS CORPUS!)
+# Optimized Configuration for MS Academic Dataset
+# GPU-Optimized Training with 2x T4 GPUs
 
 system:
   device: 'cuda'
   seed: 42
-  num_workers: 4
+  num_workers: 8
 
-# MS Academic data (complete with corpus)
+# MS Academic data
 data:
-  dataset_type: 'msa'  # MS Academic
+  dataset_type: 'msa'
   data_dir: '../Query Reformulator'
-  
-  # Files automatically determined:
-  # dataset_file: msa_dataset.hdf5
-  # corpus_file: msa_corpus.hdf5
+  index_path: './data/msa_index'
 
-# Legacy Word2Vec embeddings
 embeddings:
-  type: 'legacy'
-  path: '../Query Reformulator/D_cbow_pdw_8B.pkl'
-  embedding_dim: 500
-  freeze: false
+  type: 'sentence-transformers'           
+  path: 'sentence-transformers/all-mpnet-base-v2' 
+  embedding_dim: 384                      
+  freeze: true
 
-# Candidate Mining
+
+# Candidate Mining - Optimized
 candidate_mining:
   enabled: true
   max_candidates: 50
+  min_candidates: 20
   min_score: 0.1
+  top_k0: 50
   methods:
     - 'tfidf'
-    - 'bm25'
+    - 'bm25_contrib'
   top_k_per_method: 30
+  # Cache settings
+  cache_enabled: true
+  cache_size: 10000
 
-# RL Agent (using legacy embeddings)
+# RL Agent - Optimized for GPU
 rl_agent:
   enabled: true
-  embedding_dim: 500  # Match legacy embeddings
-  hidden_dim: 256
-  num_heads: 4
-  num_layers: 2
+  embedding_dim: 384          
+  embedding_type: 'sentence-transformers'
+  embedding_model: 'all-MiniLM-L6-v2'
+  use_pretrained_embeddings: true
+  hidden_dim: 1024            
+  num_heads: 8                
+  num_layers: 6               
   dropout: 0.1
   max_steps_per_episode: 5
   num_query_variants: 4
   
   use_pretrained_embeddings: true
   embedding_type: 'legacy'
+  
+  # PPO hyperparameters
+  learning_rate: 0.0003
+  gamma: 0.99
+  gae_lambda: 0.95
+  clip_epsilon: 0.2
+  entropy_coef: 0.01
+  value_loss_coef: 0.5
+  max_grad_norm: 0.5
+  num_ppo_epochs: 4
+  mini_batch_size: 64
 
 # RRF Fusion
 rrf_fusion:
@@ -51,13 +68,13 @@ rrf_fusion:
   k_constant: 60
   method: 'rrf'
 
-# BERT Re-ranker
+# BERT Re-ranker - Optimized
 bert_reranker:
   enabled: true
-  model_name: 'cross-encoder/ms-marco-MiniLM-L-12-v2'
-  batch_size: 128
-  max_length: 512
-  top_k_rerank: 100
+  model_name: 'cross-encoder/ms-marco-MiniLM-L-6-v2'  # Smaller, faster model
+  batch_size: 256  # Larger batch for GPU
+  max_length: 256  # Shorter for speed
+  top_k_rerank: 50  # Fewer docs to rerank
   use_fp16: true
 
 # Retrieval settings
@@ -66,13 +83,21 @@ retrieval:
   bm25_k1: 0.9
   bm25_b: 0.4
 
-# Training
+# Training - GPU Optimized
 training:
-  num_epochs: 50  # MS Academic is smaller
-  batch_size: 32
+  num_epochs: 50
+  
+  # Batching - KEY FOR GPU UTILIZATION
+  batch_size: 64               # PPO update batch size
+  collect_batch_size: 32       # Episodes to collect in parallel
+  episodes_per_update: 256     # Episodes before PPO update
+  ppo_epochs: 4                # PPO epochs per update
+  use_amp: true                # Dùng FP16
+  
+  # Learning rate
   learning_rate: 0.0003
-  episodes_per_update: 128
-  ppo_epochs: 4
+  
+  # PPO parameters
   gamma: 0.99
   gae_lambda: 0.95
   clip_epsilon: 0.2
@@ -80,31 +105,30 @@ training:
   entropy_coef: 0.01
   max_grad_norm: 0.5
   
-  # Reward shaping for citation recall
+  # GPU Optimization
+  use_amp: true                # Mixed precision (FP16)
+  pin_memory: true             # Faster CPU->GPU transfer
+  prefetch_factor: 4           # Prefetch batches
+  
+  # Reward shaping
   reward_weights:
     recall: 0.7
     mrr: 0.3
   
   # Checkpointing
-  checkpoint_dir: './checkpoints_msa'
-  save_freq: 5
+  checkpoint_dir: './checkpoints_msa_optimized'
+  save_freq: 1
   
   # Early stopping
   early_stopping_patience: 10
   
   # Logging
-  log_dir: './logs_msa'
+  log_dir: './logs_msa_optimized'
+  log_freq: 10
   
-  # Replay buffer
-  buffer_size: 10000
-
-# Evaluation metrics
-evaluation:
-  metrics:
-    - 'recall@10'
-    - 'recall@20'
-    - 'recall@50'
-    - 'mrr@10'
-    - 'ndcg@10'
-    - 'map'
-    - 'precision@10'
+  # Buffer - Larger for better sampling
+  buffer_size: 50000
+  
+  # Caching
+  embedding_cache_size: 500000
+  search_cache_size: 10000

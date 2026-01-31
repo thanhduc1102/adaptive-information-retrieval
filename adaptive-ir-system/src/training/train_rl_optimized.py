@@ -98,10 +98,10 @@ class EmbeddingCache:
             embedding = torch.randn(500)  # Default dim
         elif self.is_legacy:
             # Legacy Word2Vec adapter
-            embedding = self.embedding_model.encode(text, convert_to_tensor=True)
+            embedding = self.embedding_model.encode(text, convert_to_tensor=True, show_progress_bar=False)
         else:
             # Sentence-transformers
-            embedding = self.embedding_model.encode(text, convert_to_tensor=True)
+            embedding = self.embedding_model.encode(text, convert_to_tensor=True, show_progress_bar=False)
         
         with self.lock:
             if len(self.cache) < self.max_size:
@@ -142,19 +142,30 @@ class EmbeddingCache:
             elif self.is_legacy:
                 # Legacy adapter - process one by one (no batch support)
                 for idx, text in zip(indices_to_compute, texts_to_compute):
-                    emb = self.embedding_model.encode(text, convert_to_tensor=True)
+                    emb = self.embedding_model.encode(text, convert_to_tensor=True, show_progress_bar=False)
                     if not isinstance(emb, torch.Tensor):
                         emb = torch.tensor(emb)
-                    embeddings.append((idx, emb.cpu()))
+                    # --- PATCHED: Hazqndle both Tensor and NumPy ---
+                    if hasattr(emb, 'cpu'):
+                        embeddings.append((idx, emb.cpu()))
+                    else:
+                        # If numpy, convert to tensor first
+                        import torch
+                        embeddings.append((idx, torch.from_numpy(emb)))
                     key = self._hash_text(text)
                     with self.lock:
                         if len(self.cache) < self.max_size:
-                            self.cache[key] = emb.cpu()
+                            # --- PATCHED: Handle both Tensor and NumPy ---
+                            if hasattr(emb, 'cpu'):
+                                self.cache[key] = emb.cpu()
+                            else:
+                                import torch
+                                self.cache[key] = torch.from_numpy(emb)
             else:
                 # Sentence-transformers - true batch encoding
                 computed = self.embedding_model.encode(
                     texts_to_compute, 
-                    convert_to_tensor=True,
+                    convert_to_tensor=False,
                     batch_size=128,
                     show_progress_bar=False
                 )
@@ -162,15 +173,38 @@ class EmbeddingCache:
                 # Add to results and cache
                 for i, (idx, text) in enumerate(zip(indices_to_compute, texts_to_compute)):
                     emb = computed[i] if len(computed.shape) > 1 else computed
-                    embeddings.append((idx, emb.cpu()))
+                    if hasattr(emb, 'cpu'):
+                        # --- PATCHED: Handle both Tensor and NumPy ---
+                        if hasattr(emb, 'cpu'):
+                            embeddings.append((idx, emb.cpu()))
+                        else:
+                            # If numpy, convert to tensor first
+                            import torch
+                            embeddings.append((idx, torch.from_numpy(emb)))
+                    else:
+                        embeddings.append((idx, emb))
                     key = self._hash_text(text)
                     with self.lock:
                         if len(self.cache) < self.max_size:
-                            self.cache[key] = emb.cpu()
+                            # --- PATCHED: Handle both Tensor and NumPy ---
+                            if hasattr(emb, 'cpu'):
+                                self.cache[key] = emb.cpu()
+                            else:
+                                import torch
+                                self.cache[key] = torch.from_numpy(emb)
         
         # Sort by original index and stack
         embeddings.sort(key=lambda x: x[0])
-        return torch.stack([e[1] for e in embeddings])
+        # --- PATCHED: Final Safety Check for Stack ---
+        safe_list = []
+        import torch
+        for _, emb in embeddings:
+            if isinstance(emb, torch.Tensor):
+                safe_list.append(emb)
+            else:
+                # Convert numpy/list to tensor
+                safe_list.append(torch.tensor(emb))
+        return torch.stack(safe_list)
     
     def precompute_queries(self, queries: Dict[str, str]):
         """Pre-compute all query embeddings."""
@@ -638,7 +672,8 @@ class BatchedEpisodeCollector:
             actual_batch_size = len(batch_data)
             
             # Pad and stack tensors
-            batch_query_embs = torch.stack([d.query_emb for d in batch_data]).to(self.device)
+            # --- PATCHED: Fix mixed device error ---
+            batch_query_embs = torch.stack([d.query_emb.to(self.device) for d in batch_data])
             
             # Handle variable-length candidates with padding
             max_cands = max(d.num_candidates for d in batch_data)

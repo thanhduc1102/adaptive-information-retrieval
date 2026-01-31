@@ -63,7 +63,7 @@ def example_2_load_embeddings():
     
     # Embed text
     query = "machine learning algorithms for information retrieval"
-    embedding = adapter.encode(query, convert_to_tensor=True)
+    embedding = adapter.encode(query, convert_to_tensor=True, show_progress_bar=False)
     
     print(f"\nQuery: {query}")
     print(f"Embedding shape: {embedding.shape}")

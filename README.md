@@ -1,226 +1,74 @@
-# Adaptive Retrieve-Fuse-Re-rank Search Engine
+# Adaptive Information Retrieval System - Setup and Training Guide
 
-Deep Reinforcement Learning Query Reformulation with RRF Fusion and BERT Re-ranking
+This guide provides step-by-step instructions to set up the environment, download the necessary datasets, and start training the Adaptive IR system.
 
-## 🎯 Overview
+## 1. Clone the Repository
 
-This system implements an advanced Information Retrieval pipeline combining:
-- **RL Query Reformulation**: Learned policy for query expansion
-- **Multi-Query Retrieval**: Parallel BM25 retrievals
-- **RRF Fusion**: Reciprocal Rank Fusion for result merging
-- **BERT Re-ranking**: Cross-encoder for final ranking
-
-## 📁 Project Structure
-
-```
-adaptive-ir-system/
-├── src/
-│   ├── candidate_mining/    # Stage 0: Term extraction
-│   ├── rl_agent/            # Stage 1: RL reformulation
-│   ├── fusion/              # Stage 2: RRF fusion
-│   ├── reranker/            # Stage 3: BERT re-ranking
-│   ├── evaluation/          # Metrics computation
-│   └── utils/               # Helper functions
-├── configs/                 # Configuration files
-├── data/                    # Datasets
-├── models/                  # Trained models
-├── scripts/                 # Training/evaluation scripts
-└── tests/                   # Unit tests
-```
-
-## 🚀 Quick Start
-
-### Installation
+First, clone the specific branch of the project and navigate into the directory.
 
 ```bash
-# Create virtual environment
-python -m venv venv
-source venv/bin/activate  # Windows: venv\Scripts\activate
+git clone -b nnminh322_optim https://github.com/thanhduc1102/adaptive-information-retrieval
 
-# Install dependencies
-pip install -r requirements.txt
-
-# Download MS MARCO dataset
-python scripts/download_msmarco.py
-
-# Build search index
-python scripts/build_index.py
+cd adaptive-information-retrieval
 ```
 
-### Training
+### 2. Prepare Environment & Kaggle Credentials
+Clean up old directories and configure your Kaggle API credentials.
+```bash
+# Remove legacy directory if it exists
+rm -rf ./Query\ Reformulator/
+
+# Setup Kaggle directory and API token
+mkdir -p ~/.kaggle
+echo '{"username":"natmin322","key":"5d6d893e82b5de8808fdb07893bcf750"}' > ~/.kaggle/kaggle.json
+```
+
+## 3. Download Dataset
+(You must be install kaggle_cli for download this dataset. If you running in kaggle env, ignore this. Otherwise, please install kaggle_cli by Google Searching :)))) or handcraft downloading )
+```bash
+kaggle datasets download thanhduc1108/ir-msmarco-webmining
+unzip ir-msmarco-webmining.zip
+```
+
+## 4. Install Dependencies
+Navigate to the system directory and install Python dependencies using uv
+```bash
+cd ./adaptive-ir-system/
+
+# Install uv package manager
+pip install uv
+
+# Install requirements
+uv pip install -r requirements.txt 
+
+# Optional: If running in a root environment (like a Kaggle server or Docker container)
+# uv pip install -r requirements.txt --system
+
+uv pip install --upgrade huggingface_hub transformers peft
+uv pip install --upgrade torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+```
+
+## 5. System Configuration (Java)
+The system requires Java (OpenJDK 21) for Pyserini/Lucene operations.
+```bash
+# Update repositories and install JDK 21
+apt-get update --allow-releaseinfo-change && apt-get install -y openjdk-21-jdk
+
+# Set JAVA_HOME environment variable
+export JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64
+```
+
+
+## 6. Training
+Run the training script with the specified configuration.
 
 ```bash
-# Train with default configuration
-python train.py --config configs/default_config.yaml
+# If you want to using modern modal (as sentence-transformers/all-mpnet-base-v2 2019). ~ 25h for 1 full epoch with 271k sample (at GPU T4)
+python train.py --config ./configs/msa_config.yaml --epochs 50 
 
-# Train on GPU with custom settings
-python train.py \
-    --config configs/default_config.yaml \
-    --device cuda \
-    --epochs 50 \
-    --test
+# If you want to using old model (D_cbow_pdw_8B base on word2vec 2013) ~ 8h for 1 full epoch with 271k sample (at GPU T4)
+python train_quickly.py --config ./configs/msa_quick_config.yaml --batch-size 64 --epochs 50
+
+# If you just want to smoke test (D_cbow_pdw_8B) for 1k sample (you can specify num of sample in smoke config)'
+python train_smoke_test.py --config ./configs/msa_smoke_test.yaml
 ```
-
-### Inference
-
-```bash
-# Interactive mode
-python inference.py \
-    --config configs/default_config.yaml \
-    --checkpoint checkpoints/best_model.pt \
-    --interactive
-
-# Single query
-python inference.py \
-    --config configs/default_config.yaml \
-    --checkpoint checkpoints/best_model.pt \
-    --query "what is machine learning"
-```
-
-## 📚 Detailed Usage
-
-### Using Legacy Datasets (Jeopardy, TREC-CAR, MS Academic)
-
-This system is compatible with the original dl4ir-query-reformulator datasets:
-
-**1. Test Legacy Data Loading:**
-```bash
-# Verify all HDF5 files load correctly
-python scripts/test_legacy_data.py
-```
-
-**2. Train on Legacy Dataset:**
-```bash
-# Train on TREC-CAR dataset
-python train.py \
-    --config configs/legacy_config.yaml \
-    --device cuda
-
-# Train on Jeopardy dataset
-python train.py --config configs/legacy_config.yaml --device cuda
-# (Edit legacy_config.yaml to set dataset_type: 'jeopardy')
-```
-
-**Legacy Dataset Structure:**
-- **TREC-CAR**: `trec_car_dataset.hdf5` (queries = article sections)
-- **Jeopardy**: `jeopardy_dataset.hdf5`, `jeopardy_corpus.hdf5` (queries = questions)
-- **MS Academic**: `msa_dataset.hdf5`, `msa_corpus.hdf5` (queries = paper titles)
-- **Embeddings**: `D_cbow_pdw_8B.pkl` (374K Word2Vec embeddings, 500-dim)
-
-### Using MS MARCO Dataset
-
-### 1. Data Preparation
-
-**Download MS MARCO:**
-```bash
-# Download all data (collection + queries + qrels)
-python scripts/download_msmarco.py --data_dir ./data/msmarco
-
-# Verify download
-python scripts/download_msmarco.py --data_dir ./data/msmarco --verify
-
-# Print statistics
-python scripts/download_msmarco.py --data_dir ./data/msmarco --stats
-```
-
-**Build Pyserini Index:**
-```bash
-# Build BM25 index (~30 minutes)
-python scripts/build_index.py \
-    --collection ./data/msmarco/collection.tsv \
-    --index ./data/msmarco/index \
-    --threads 8
-```
-
-### 2. Training
-
-**Basic Training:**
-```bash
-python train.py --config configs/default_config.yaml
-```
-
-**Advanced Options:**
-```bash
-python train.py \
-    --config configs/default_config.yaml \
-    --device cuda \              # Use GPU
-    --epochs 50 \                # Number of epochs
-    --seed 42 \                  # Random seed
-    --test                       # Run test evaluation after training
-```
-
-**Resume from Checkpoint:**
-```bash
-python train.py \
-    --config configs/default_config.yaml \
-    --checkpoint checkpoints/checkpoint_epoch_10.pt
-```
-
-**Training Outputs:**
-- Checkpoints: `checkpoints/checkpoint_epoch_*.pt`
-- Best model: `checkpoints/best_model.pt`
-- Training logs: `logs/train.log`
-- Test results: `checkpoints/test_results.json`
-
-### 3. Inference
-
-**Interactive Mode:**
-```bash
-python inference.py \
-    --config configs/default_config.yaml \
-    --checkpoint checkpoints/best_model.pt \
-    --interactive
-```
-
-**Single Query:**
-```bash
-python inference.py \
-    --config configs/default_config.yaml \
-    --checkpoint checkpoints/best_model.pt \
-    --query "what is machine learning" \
-    --top_k 10
-```
-
-**Batch Queries:**
-```bash
-python inference.py \
-    --config configs/default_config.yaml \
-    --checkpoint checkpoints/best_model.pt \
-    --queries_file data/msmarco/queries.dev.tsv \
-    --output results/dev_results.json \
-    --top_k 100
-```
-
-```bash
-# Train RL agent
-python scripts/train_rl_agent.py --config configs/train_config.yaml
-
-# Full pipeline evaluation
-python scripts/evaluate_pipeline.py --config configs/eval_config.yaml
-```
-
-## 📊 Performance
-
-| Method | Recall@100 | MRR@10 | nDCG@10 | Latency (ms) |
-|--------|------------|--------|---------|--------------|
-| BM25 | 65% | 18% | 22% | 20 |
-| BM25+RM3 | 72% | 19% | 23% | 35 |
-| **Ours** | **78%** | **25%** | **30%** | 140 |
-
-## 🔬 Research Questions
-
-1. Does RL reformulation outperform RM3?
-2. Does RRF improve OOD robustness?
-3. What's the Recall/Latency tradeoff for different m?
-4. What term selection patterns does the agent learn?
-
-## 📚 Citation
-
-Based on:
-- Nogueira & Cho (2017): Task-Oriented Query Reformulation with RL
-- Cormack et al. (2009): Reciprocal Rank Fusion
-- Nogueira & Cho (2019): Passage Re-ranking with BERT
-
-## 📄 License
-
-BSD 3-Clause License (inherited from original QueryReformulator)
