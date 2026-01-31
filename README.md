@@ -199,14 +199,6 @@ python scripts/train_rl_agent.py --config configs/train_config.yaml
 python scripts/evaluate_pipeline.py --config configs/eval_config.yaml
 ```
 
-## 📊 Performance
-
-| Method | Recall@100 | MRR@10 | nDCG@10 | Latency (ms) |
-|--------|------------|--------|---------|--------------|
-| BM25 | 65% | 18% | 22% | 20 |
-| BM25+RM3 | 72% | 19% | 23% | 35 |
-| **Ours** | **78%** | **25%** | **30%** | 140 |
-
 ## 🔬 Research Questions
 
 1. Does RL reformulation outperform RM3?
